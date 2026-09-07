@@ -3,9 +3,10 @@
 A gamified language-learning web app — Duolingo's learning path, lesson player and
 progression systems — built as a 24-hour full-stack assignment.
 
-**Current status: Phase 1 (foundation) complete.** The frontend and backend run,
-talk to each other, and carry the Stitch design tokens. None of the learning
-features exist yet — see [Current implementation status](#current-implementation-status).
+**Current status: Phase 2 (database) complete.** The frontend and backend run and
+talk to each other, and a seeded SQLite database holds a full beginner course.
+No API serves that content yet — see
+[Current implementation status](#current-implementation-status).
 
 ---
 
@@ -20,7 +21,8 @@ features exist yet — see [Current implementation status](#current-implementati
 | Config | pydantic-settings | 2.13.1 |
 | Backend tests | pytest + FastAPI TestClient | 8.4.2 |
 | Frontend tests | Node's built-in test runner (`node --test`) | — |
-| Database | SQLite — **not yet implemented (Phase 2)** | — |
+| Database | SQLite (stdlib `sqlite3` driver) | — |
+| ORM | SQLAlchemy 2.0 (declarative, synchronous) | 2.0.52 |
 
 ---
 
@@ -31,11 +33,24 @@ duolingo/
 ├── backend/
 │   ├── app/
 │   │   ├── main.py               FastAPI factory: CORS, router mount
-│   │   ├── core/config.py        typed settings from environment
+│   │   ├── core/config.py        typed settings from environment (incl. DATABASE_URL)
+│   │   ├── db/
+│   │   │   ├── base.py           DeclarativeBase
+│   │   │   ├── session.py        engine, SessionLocal, get_db, FK pragma
+│   │   │   ├── init_db.py        create_all
+│   │   │   ├── seed_data.py      the course content, as plain data
+│   │   │   └── seed.py           idempotent, transactional seeding
+│   │   ├── models/
+│   │   │   ├── content.py        Course, Unit, Skill, Lesson, Exercise
+│   │   │   ├── user.py           User, UserStats
+│   │   │   └── progress.py       UserSkillProgress, LessonAttempt
 │   │   └── api/v1/
 │   │       ├── router.py         aggregates v1 routers
 │   │       └── routes/health.py  GET /api/v1/health
-│   ├── tests/test_health.py
+│   ├── tests/
+│   │   ├── test_health.py        4 tests
+│   │   └── test_database.py      20 tests
+│   ├── duolingo.db               SQLite file (gitignored, rebuilt by the seed)
 │   ├── requirements.txt
 │   ├── pytest.ini
 │   └── .env.example
@@ -73,6 +88,9 @@ python -m venv .venv
 .venv/Scripts/python.exe -m pip install -r requirements.txt   # Windows
 # source .venv/bin/activate && pip install -r requirements.txt  # macOS / Linux
 
+# create the database and seed the course (first time, and any time you want to reset)
+.venv/Scripts/python.exe -m app.db.seed
+
 # run
 .venv/Scripts/python.exe -m uvicorn app.main:app --reload --port 8000
 ```
@@ -80,6 +98,83 @@ python -m venv .venv
 Backend runs at **http://localhost:8000**. Interactive API docs: http://localhost:8000/docs
 
 Optional: copy `.env.example` to `.env` to override the allowed CORS origins.
+
+---
+
+## Database
+
+**Location:** `backend/duolingo.db` — a single SQLite file, gitignored, rebuilt
+by the seed command.
+
+**Setup and reset:**
+
+```bash
+cd backend
+.venv/Scripts/python.exe -m app.db.seed     # creates tables + seeds content
+```
+
+The seed is **idempotent** — running it repeatedly inserts nothing new and never
+destroys learner progress. To start completely fresh, delete the file first:
+
+```bash
+rm backend/duolingo.db && .venv/Scripts/python.exe -m app.db.seed
+```
+
+Expected output:
+
+```
+Seed complete.
+            users: 1
+       user_stats: 1
+          courses: 1
+            units: 3
+           skills: 9
+          lessons: 18
+        exercises: 90
+  user_skill_progress: 9
+```
+
+**`DATABASE_URL`.** Set in `app/core/config.py`, overridable by the environment
+variable of the same name. The default is an *absolute* path computed from the
+module's own location, so the same database is found whether you launch uvicorn
+from `backend/` or pytest from the repository root — a relative URL would quietly
+open two different files. Pointing at Postgres later is this one variable plus
+Alembic; no model or query changes.
+
+### Schema overview
+
+Nine tables. Content on the left, per-user state on the right:
+
+```
+courses ──< units ──< skills ──< lessons ──< exercises
+                        │           │
+                        │           └──< lesson_attempts >── users
+                        │                                      │
+                        └──< user_skill_progress >─────────────┤
+                                                               │
+                                              user_stats ──────┘  (one row per user)
+```
+
+| Table | Holds |
+|---|---|
+| `courses` | The language pair — one course: English → Spanish |
+| `units` | Themed groups of skills, ordered within the course |
+| `skills` | The path nodes, ordered within a unit |
+| `lessons` | One sitting; two per skill |
+| `exercises` | One question; five per lesson, 90 total, all five types |
+| `users` | The learner (no authentication — one seeded user) |
+| `user_stats` | Current XP, hearts, streak, daily goal, gems — one row per user |
+| `user_skill_progress` | Lessons completed and crowns, per user per skill |
+| `lesson_attempts` | History of lesson sessions |
+
+**Locked / available / completed is not stored.** It is derived from skill
+ordering plus `user_skill_progress.crowns`, so the two can never disagree. The
+full rationale, the ER diagram, constraints and index choices are in
+[`docs/CODEBASE_LEARNING.md` §6](docs/CODEBASE_LEARNING.md).
+
+**Seeded content:** 1 course, 3 units, 9 skills, 18 lessons, 90 original beginner
+exercises (18 of each of the five types), 1 learner starting at 0 XP with 5
+hearts and a 30 XP daily goal.
 
 ## How to start the frontend
 
@@ -147,14 +242,29 @@ curl http://localhost:8000/api/v1/health
 ## Tests
 
 ```bash
-cd backend  && .venv/Scripts/python.exe -m pytest      # 4 tests: health + CORS
+cd backend  && .venv/Scripts/python.exe -m pytest      # 24 tests: health/CORS + database
 cd frontend && npm test                                # 4 tests: API client
 cd frontend && npx tsc --noEmit && npm run lint         # types + lint
 ```
 
+Database tests build a throwaway SQLite file per test and seed it with the same
+`seed()` function the command uses, so they prove the seed works on an empty
+database.
+
 ---
 
 ## Current implementation status
+
+**Implemented (Phase 2)**
+
+- SQLite database with nine tables, foreign keys enforced, unique and CHECK
+  constraints, and indexes on every lookup path
+- SQLAlchemy 2.0 declarative models with relationships in both directions
+- `DATABASE_URL` configuration with a safe absolute default
+- Idempotent, transactional seed: `python -m app.db.seed`
+- 90 original beginner exercises covering all five exercise types
+- 20 database tests covering schema, seed counts, determinism, relationships and
+  every constraint
 
 **Implemented (Phase 1)**
 
@@ -171,13 +281,18 @@ cd frontend && npx tsc --noEmit && npm run lint         # types + lint
 
 **Not implemented yet**
 
-- Database, ORM models, migrations, seed data (Phase 2)
-- Learning path / skill tree, units, skills, lessons (Phases 3, 6)
-- Lesson player and the five exercise types (Phases 4, 7)
-- XP, hearts, streaks, daily goal, gems (Phases 3, 4)
+- **No learning-path API.** `GET /courses/{id}/path` does not exist (Phase 3)
+- **No lesson API.** start / answer / complete do not exist (Phase 4)
+- **No frontend database integration.** The frontend is still the Phase 1 shell
+- XP, hearts, streak and unlock *rules* — the columns exist, the logic does not
+  (Phases 3, 4)
+- Lesson player and the five exercise renderers (Phase 7)
 - Leaderboard, profile, achievements (Phase 8)
-- Authentication — deliberately simplified to a default learner in a later phase
 - The real component library and responsive shell (Phase 5)
+- Authentication — deliberately simplified to a default learner
+- Migrations: the schema is created with `create_all`, which creates missing
+  tables but does not alter existing ones. A model change means deleting
+  `backend/duolingo.db` and re-seeding. Alembic is the migration path.
 
 ---
 
@@ -186,8 +301,8 @@ cd frontend && npx tsc --noEmit && npm run lint         # types + lint
 | Phase | Objective |
 |---|---|
 | 0 | Repository + Stitch audit, architecture plan — see `docs/PHASE_0_AUDIT.md` |
-| **1** | **Foundation: both apps running and connected** ← current |
-| 2 | Database schema, SQLAlchemy models, seed content |
+| 1 | Foundation: both apps running and connected |
+| **2** | **Database schema, SQLAlchemy models, seed content** ← current |
 | 3 | Learning path + user stats API |
 | 4 | Lesson engine API: start / answer / complete, answer grading |
 | 5 | Design system components + responsive app shell |

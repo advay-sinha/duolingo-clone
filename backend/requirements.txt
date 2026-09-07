@@ -1,9 +1,9 @@
-# Phase 1 dependencies — foundation only.
-# Database, ORM and migration packages are intentionally absent; they arrive in Phase 2.
+# Backend dependencies.
 
 fastapi==0.121.2          # web framework: routing, dependency injection, OpenAPI
 uvicorn[standard]==0.42.0 # ASGI server used to run the app in development
 pydantic-settings==2.13.1 # typed, env-var-driven configuration (Settings class)
+sqlalchemy==2.0.52        # ORM and Core; SQLite is reached via Python's stdlib sqlite3
 
 # --- development / test only ---
 pytest==8.4.2             # test runner

@@ -7,8 +7,18 @@ startup on a bad value rather than silently at request time.
 """
 
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# backend/app/core/config.py -> backend/
+BACKEND_DIR = Path(__file__).resolve().parents[2]
+
+# Absolute path so the database is found no matter which directory the process
+# was started from. A relative "sqlite:///duolingo.db" would silently create a
+# second, empty database when uvicorn and pytest are launched from different
+# working directories -- a confusing failure worth designing out.
+DEFAULT_SQLITE_URL = f"sqlite:///{(BACKEND_DIR / 'duolingo.db').as_posix()}"
 
 
 class Settings(BaseSettings):
@@ -34,6 +44,17 @@ class Settings(BaseSettings):
     # narrow list rather than "*" so the development config does not quietly
     # become a permissive production config.
     cors_origins: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
+
+    # --- database -------------------------------------------------------------
+    # One source of truth for where the data lives. Every other module asks
+    # settings for this rather than building a path of its own, so pointing the
+    # app at a different database (a test file, or Postgres later) is a single
+    # environment variable and no code change.
+    database_url: str = DEFAULT_SQLITE_URL
+
+    # Echo every SQL statement to stdout. Off by default; useful when learning
+    # what the ORM actually emits.
+    database_echo: bool = False
 
 
 @lru_cache
