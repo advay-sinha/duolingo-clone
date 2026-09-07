@@ -51,12 +51,6 @@ duolingo/
 │   │   ├── health.ts             GET /health binding
 │   │   └── client.test.ts
 │   └── .env.example
-│
-├── docs/
-│   ├── PHASE_0_AUDIT.md          repository + design audit, full architecture plan
-│   └── CODEBASE_LEARNING.md      the master learning document
-│
-├── stitch/                       READ-ONLY design reference — never modified
 └── README.md
 ```
 
