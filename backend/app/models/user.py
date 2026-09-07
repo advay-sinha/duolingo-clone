@@ -15,7 +15,15 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 
-from sqlalchemy import CheckConstraint, Date, DateTime, ForeignKey, Integer, String
+from sqlalchemy import (
+    CheckConstraint,
+    Date,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -27,23 +35,47 @@ def utcnow() -> datetime:
 
 
 class User(Base):
-    """A learner.
+    """A learner, with local credentials (Phase 9).
 
-    Authentication is deliberately out of scope for this assignment, so there is
-    no password, no email and no session table. One learner is seeded and the
-    API will resolve "the current user" through a single dependency in Phase 3 —
-    which is the only place real auth would need to change.
+    Phases 1–8 had no password, no email and no session: one seeded learner was
+    resolved by username. Phase 9 makes the app genuinely multi-user, so this row
+    now carries what is needed to authenticate someone.
+
+    **What is deliberately absent:** roles, email verification state, password
+    reset tokens, OAuth identities, last-login tracking. Every one of them is a
+    real feature of a real identity system and none is needed to let several
+    learners keep separate progress on one machine.
+
+    ``password_hash`` is a bcrypt hash and is **never** serialised. No response
+    schema in the codebase declares a field for it — the same structural
+    guarantee used for exercise answers, for the same reason.
     """
 
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     # Natural key: the seed looks a user up by username rather than by id, so
-    # re-running it cannot create a second learner.
+    # re-running it cannot create a second learner. Registration derives one
+    # from the email, so a learner never has to invent two names.
     username: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
-    display_name: Mapped[str] = mapped_column(String(80), nullable=False)
+    # Unique, because it is the login identifier. Stored casefolded (see
+    # `auth_service.normalize_email`) so "Alex@x.com" and "alex@x.com" are one
+    # account rather than two.
+    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    # bcrypt output: algorithm, cost and salt are all encoded in this string, so
+    # no separate salt column is needed and the cost can be raised later without
+    # invalidating existing hashes.
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Unique too: it is what other learners see on the leaderboard, and two
+    # identical names there would be actively confusing.
+    display_name: Mapped[str] = mapped_column(String(80), unique=True, nullable=False)
     avatar_url: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    sessions: Mapped[list["Session"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
 
     # uselist=False makes this a genuine one-to-one: a user has exactly one
     # stats row, not a list containing one.
@@ -107,6 +139,42 @@ class UserStats(Base):
     daily_xp: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     user: Mapped[User] = relationship(back_populates="stats")
+
+
+class Session(Base):
+    """One logged-in browser.
+
+    **Why a database session rather than a JWT.** A JWT is self-contained, which
+    is exactly the problem for a logout button: a signed token stays valid until
+    it expires, so "log out" either does nothing server-side or needs a
+    revocation list — which is a session table with extra steps. A row that can
+    be deleted makes logout mean what the word says. At this scale the extra
+    lookup per request is one indexed primary-key read.
+
+    **Why the token is stored hashed.** ``id`` holds the SHA-256 of the token,
+    never the token itself. Anyone who reads the database therefore cannot use
+    what they find to impersonate a learner. A fast hash is correct here — unlike
+    a password, the token is 32 bytes of `secrets` randomness, so there is
+    nothing to brute-force.
+
+    **Why expiry is a column, not a scheduler.** Same reasoning as heart
+    regeneration: expiry is a pure function of a stored timestamp and the clock,
+    checked on read. Nothing needs to sweep the table for the rule to be correct.
+    """
+
+    __tablename__ = "sessions"
+    __table_args__ = (Index("ix_sessions_user_id", "user_id"),)
+
+    #: SHA-256 hex digest of the opaque session token. The token itself exists
+    #: only in the cookie and never on this server's disk.
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    user: Mapped[User] = relationship(back_populates="sessions")
 
 
 from app.models.progress import LessonAttempt, UserSkillProgress  # noqa: E402

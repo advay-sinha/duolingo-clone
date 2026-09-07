@@ -60,7 +60,7 @@ def db(tmp_path) -> Session:
         cursor.close()
 
     Base.metadata.create_all(engine)
-    session = sessionmaker(bind=engine, expire_on_commit=False)()
+    session = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)()
     seed(session)
     try:
         yield session
@@ -80,8 +80,14 @@ def count(db: Session, model) -> int:
 
 
 def test_all_expected_tables_are_created(db: Session) -> None:
+    """Pins the schema. Adding a table is a deliberate act, so this test is
+    meant to fail until it is updated — as it did when Phase 4 introduced
+    ``lesson_attempt_answers``, when Phase 7 added the achievement tables, and
+    again in Phase 9 for ``sessions`` and ``lesson_attempt_pairs``."""
     names = set(Base.metadata.tables)
     assert names == {
+        "achievements",
+        "user_achievements",
         "users",
         "user_stats",
         "courses",
@@ -91,6 +97,9 @@ def test_all_expected_tables_are_created(db: Session) -> None:
         "exercises",
         "user_skill_progress",
         "lesson_attempts",
+        "lesson_attempt_answers",
+        "lesson_attempt_pairs",
+        "sessions",
     }
 
 

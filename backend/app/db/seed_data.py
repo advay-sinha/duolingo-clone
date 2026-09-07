@@ -791,3 +791,61 @@ DEFAULT_USER: dict[str, Any] = {
         "daily_xp": 0,
     },
 }
+
+
+# --------------------------------------------------------------------------
+# Achievements
+#
+# A small, fixed catalogue. Every entry is evaluable from data the application
+# already stores -- see services/achievement_service.PREDICATES, where each key
+# below has a matching one-line predicate. Nothing here needs a new column, and
+# no achievement was written that the data cannot support.
+#
+# `key` is the natural key: the seed finds rows by it, and the evaluator
+# dispatches on it, so the two stay in step across reseeds.
+# --------------------------------------------------------------------------
+
+ACHIEVEMENTS: list[dict[str, Any]] = [
+    {
+        "key": "FIRST_LESSON",
+        "title": "First steps",
+        "description": "Complete your first lesson",
+        "icon": "star",
+        "color_key": "green",
+    },
+    {
+        "key": "PERFECT_LESSON",
+        "title": "Flawless",
+        "description": "Complete a lesson without a single mistake",
+        "icon": "target",
+        "color_key": "blue",
+    },
+    {
+        "key": "FIRST_SKILL",
+        "title": "Crowned",
+        "description": "Earn your first crown by finishing every lesson in a skill",
+        "icon": "crown",
+        "color_key": "gold",
+    },
+    {
+        "key": "XP_100",
+        "title": "Century",
+        "description": "Earn 100 XP in total",
+        "icon": "bolt",
+        "color_key": "gold",
+    },
+    {
+        "key": "STREAK_3",
+        "title": "On a roll",
+        "description": "Reach a 3-day streak",
+        "icon": "flame",
+        "color_key": "orange",
+    },
+    {
+        "key": "STREAK_7",
+        "title": "Unstoppable",
+        "description": "Reach a 7-day streak",
+        "icon": "flame",
+        "color_key": "purple",
+    },
+]

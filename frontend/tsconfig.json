@@ -33,5 +33,8 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules"]
+  // vitest.config.ts is excluded because Next 16 and vitest ship
+  // different vite builds, so their Plugin types conflict. Vitest still
+  // type-checks its own config; app code is unaffected.
+  "exclude": ["node_modules", "vitest.config.ts"]
 }

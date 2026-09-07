@@ -92,3 +92,47 @@ test("throws ApiError with status 0 when the backend is unreachable", async () =
     },
   );
 });
+
+test("uses the backend's own message when the error envelope is present", async () => {
+  await withFetch(
+    async () =>
+      new Response(
+        JSON.stringify({
+          error: { code: "conflict", message: "No hearts remaining." },
+        }),
+        { status: 409, headers: { "Content-Type": "application/json" } },
+      ),
+    async () => {
+      await assert.rejects(
+        () => request("/lessons/1/start"),
+        (error: unknown) => {
+          assert.ok(error instanceof ApiError);
+          // The learner sees the domain sentence, not a URL and a number.
+          assert.equal(error.message, "No hearts remaining.");
+          assert.equal(error.code, "conflict");
+          assert.equal(error.status, 409);
+          return true;
+        },
+      );
+    },
+  );
+});
+
+test("falls back to readable copy when the body is not an envelope", async () => {
+  await withFetch(
+    async () => new Response("<html>gateway error</html>", { status: 502 }),
+    async () => {
+      await assert.rejects(
+        () => request("/health"),
+        (error: unknown) => {
+          assert.ok(error instanceof ApiError);
+          assert.equal(error.status, 502);
+          assert.equal(error.code, null);
+          // No HTML, no stack, no path-and-status developer sentence.
+          assert.match(error.message, /server had a problem/i);
+          return true;
+        },
+      );
+    },
+  );
+});

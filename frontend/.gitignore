@@ -42,3 +42,4 @@ next-env.d.ts
 
 # keep the committed example env
 !.env.example
+AGENTS.md

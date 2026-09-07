@@ -48,10 +48,13 @@ from __future__ import annotations
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.db.init_db import create_tables
-from app.db.seed_data import COURSE, DEFAULT_USER
+from app.db.seed_data import ACHIEVEMENTS, COURSE, DEFAULT_USER
 from app.db.session import SessionLocal
+from app.services import auth_service
 from app.models import (
+    Achievement,
     Course,
     Exercise,
     Lesson,
@@ -156,17 +159,68 @@ def _seed_course(db: Session) -> Course:
     return course
 
 
+def _seed_achievements(db: Session) -> None:
+    """Insert the achievement catalogue, keyed by ``key``.
+
+    Same natural-key pattern as the rest of the seed, so re-running adds nothing
+    and an achievement added to the catalogue later is picked up without
+    disturbing anyone's existing unlocks.
+    """
+    for index, data in enumerate(ACHIEVEMENTS):
+        existing = db.scalar(
+            select(Achievement).where(Achievement.key == data["key"])
+        )
+        if existing is None:
+            db.add(
+                Achievement(
+                    key=data["key"],
+                    title=data["title"],
+                    description=data["description"],
+                    icon=data["icon"],
+                    color_key=data["color_key"],
+                    order_index=index,
+                )
+            )
+
+
 def _seed_user(db: Session) -> User:
-    """Insert the default learner and their stats row, if absent."""
+    """Insert the default learner and their stats row, if absent.
+
+    Since Phase 9 the seeded learner is a **normal account**: it has an email and
+    a bcrypt password hash and signs in through ``POST /auth/login`` like anyone
+    else. It is no longer special to the runtime — ``get_current_user`` resolves
+    a session and has never heard of it — it is simply a convenient account to
+    log into on a fresh clone.
+
+    Credentials come from settings (``DEMO_EMAIL`` / ``DEMO_USER_PASSWORD``), not
+    from a literal in this file, so a developer can change them without editing
+    code and nothing here is a committed password for anything real.
+
+    An existing seeded user from an earlier phase is **backfilled** rather than
+    replaced: their progress is real work and deleting it to add a column would
+    be the seed destroying the data it exists to create.
+    """
+    settings = get_settings()
     user = db.scalar(select(User).where(User.username == DEFAULT_USER["username"]))
     if user is None:
         user = User(
             username=DEFAULT_USER["username"],
+            email=auth_service.normalize_email(settings.demo_email),
+            password_hash=auth_service.hash_password(settings.demo_user_password),
             display_name=DEFAULT_USER["display_name"],
             avatar_url=DEFAULT_USER["avatar_url"],
         )
         db.add(user)
         db.flush()
+    else:
+        # Idempotent backfill for a database seeded before Phase 9. Only fills
+        # blanks: re-running the seed must never reset a password someone chose.
+        if not user.email:
+            user.email = auth_service.normalize_email(settings.demo_email)
+        if not user.password_hash:
+            user.password_hash = auth_service.hash_password(
+                settings.demo_user_password
+            )
 
     stats = db.get(UserStats, user.id)
     if stats is None:
@@ -207,6 +261,7 @@ def seed(db: Session) -> None:
     """
     try:
         _seed_course(db)
+        _seed_achievements(db)
         user = _seed_user(db)
         db.flush()  # ensure skills and the user have ids before pairing them
         _seed_skill_progress(db, user)
@@ -229,6 +284,7 @@ def main() -> None:
             for model in (
                 User,
                 UserStats,
+                Achievement,
                 Course,
                 Unit,
                 Skill,

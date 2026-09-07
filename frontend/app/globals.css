@@ -27,20 +27,29 @@
   --color-purple: #ce82ff;
   --color-purple-depth: #a550de;
 
-  /* --- surfaces ----------------------------------------------------------- */
-  --color-surface: #ffffff; /* cards, modals */
-  --color-surface-subtle: #f7f7f7; /* app background, inset areas */
-  --color-border: #e5e5e5; /* neutral card border */
-  --color-border-depth: #cecece; /* neutral bottom ledge */
+  /* --- surfaces and text --------------------------------------------------
+     These point at raw CSS variables rather than literals, which is what makes
+     dark mode possible without touching a single component. The brand colours
+     above stay fixed: green still means correct and red still means a mistake,
+     in either theme. Only the *grounds* they sit on change.                 */
+  --color-surface: var(--surface);
+  --color-surface-subtle: var(--surface-subtle);
+  --color-border: var(--border);
+  --color-border-depth: var(--border-depth);
 
-  /* --- text --------------------------------------------------------------- */
-  --color-text: #4b4b4b;
-  --color-text-secondary: #777777;
-  --color-text-disabled: #afafaf;
+  --color-text: var(--text);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-disabled: var(--text-disabled);
 
-  /* --- feedback grounds (lesson player, Phase 7) -------------------------- */
-  --color-feedback-correct: #d7ffb8;
-  --color-feedback-incorrect: #ffdfe0;
+  --color-feedback-correct: var(--feedback-correct);
+  --color-feedback-incorrect: var(--feedback-incorrect);
+  /* Text *on* the feedback grounds. `green-depth` reads at only 2.9:1 on the
+     light correct ground and `red-depth` at 3.5:1 on the incorrect one, which
+     fails for the small text in that bar. These keep the same green/red meaning
+     at a readable weight, in both themes, without darkening the depth colours
+     that give every button its 3D edge. */
+  --color-on-correct: var(--on-correct);
+  --color-on-incorrect: var(--on-incorrect);
 
   /* --- typography ---------------------------------------------------------
      One family. Thirteen semantic sizes, each carrying its own line-height,
@@ -104,6 +113,73 @@
   --spacing-content: 1040px;
   --spacing-path: 600px;
   --spacing-rail: 320px;
+}
+
+/* ============================================================================
+   Theme palettes.
+
+   Light is the default and lives on bare `:root`, so a page renders correctly
+   before any JavaScript runs. Dark is applied by `data-theme="dark"` on <html>,
+   set by an inline script in the document head before React hydrates — which is
+   what prevents both a flash of the wrong theme and a hydration mismatch.
+
+   `prefers-color-scheme` is honoured only when the learner has expressed no
+   preference; an explicit choice always wins, in both directions.
+
+   Dark is not an inversion. Surfaces are near-black with a slight green cast so
+   they sit under the brand palette rather than fighting it, borders are lifted
+   rather than darkened (a dark border on a dark ground is invisible), and the
+   feedback grounds are deep tints of the same green and red so correct still
+   reads as correct.
+   ========================================================================== */
+:root {
+  --surface: #ffffff;
+  --surface-subtle: #f7f7f7;
+  --border: #e5e5e5;
+  --border-depth: #cecece;
+  --text: #4b4b4b;
+  /* #777777 measured 4.48:1 on white — a rounding error short of AA for body
+     text. #6b6b6b is 5.33:1 on white and 4.97:1 on the subtle ground. */
+  --text-secondary: #6b6b6b;
+  --text-disabled: #afafaf;
+  --feedback-correct: #d7ffb8;
+  --feedback-incorrect: #ffdfe0;
+  --on-correct: #2b6700;
+  --on-incorrect: #a51616;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  /* Guarded, so an explicit light choice beats a dark operating system. */
+  :root:not([data-theme="light"]) {
+    --surface: #1b201a;
+    --surface-subtle: #131711;
+    --border: #333a30;
+    --border-depth: #444c40;
+    --text: #e8ece5;
+    --text-secondary: #a3ab9d;
+    --text-disabled: #6d756a;
+    --feedback-correct: #233311;
+    --feedback-incorrect: #3a1614;
+    --on-correct: #a8e86a;
+    --on-incorrect: #ff9b9b;
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --surface: #1b201a;
+  --surface-subtle: #131711;
+  --border: #333a30;
+  --border-depth: #444c40;
+  --text: #e8ece5;
+  --text-secondary: #a3ab9d;
+  --text-disabled: #6d756a;
+  --feedback-correct: #233311;
+  --feedback-incorrect: #3a1614;
+  --on-correct: #a8e86a;
+  --on-incorrect: #ff9b9b;
+  color-scheme: dark;
 }
 
 body {
@@ -191,4 +267,42 @@ body {
     transition-duration: 0.01ms !important;
     animation-duration: 0.01ms !important;
   }
+}
+
+/* ============================================================================
+   Lesson player animations.
+
+   CSS keyframes only — no animation library. The feedback bar slides up from
+   the bottom edge; the completion badge pops. Both are short and purposeful,
+   and both are disabled by the prefers-reduced-motion block above.
+   ========================================================================== */
+@keyframes feedback-in {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+@keyframes pop-in {
+  0% {
+    transform: scale(0.85);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.04);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.animate-feedback-in {
+  animation: feedback-in 180ms ease-out;
+}
+
+.animate-pop-in {
+  animation: pop-in 420ms cubic-bezier(0.34, 1.56, 0.64, 1);
 }

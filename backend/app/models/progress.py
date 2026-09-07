@@ -22,12 +22,16 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from typing import Any
+
 from sqlalchemy import (
+    JSON,
     Boolean,
     DateTime,
     ForeignKey,
     Index,
     Integer,
+    String,
     UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -134,3 +138,127 @@ class LessonAttempt(Base):
 
     user: Mapped["User"] = relationship(back_populates="lesson_attempts")
     lesson: Mapped["Lesson"] = relationship(back_populates="attempts")
+    answers: Mapped[list["LessonAttemptAnswer"]] = relationship(
+        back_populates="attempt",
+        cascade="all, delete-orphan",
+    )
+
+
+class LessonAttemptAnswer(Base):
+    """One submitted answer within one attempt.
+
+    **Added in Phase 4, deliberately not earlier** (ADR-16). Phase 2 left it out
+    because nothing wrote or read it; every reason for it to exist is a Phase 4
+    reason, and all three arrive at once:
+
+    1. **Idempotency.** ``UNIQUE(attempt_id, exercise_id)`` is what makes a
+       resubmitted answer harmless. Without it, a double-clicked Check button or
+       a retried request would deduct a second heart for the same mistake. The
+       constraint is the mechanism — the service checks first, but the database
+       is what actually guarantees it under a race.
+    2. **Server-authoritative completion.** The server must decide whether a
+       lesson is finished from data it produced itself, not from a client
+       claiming "I answered everything". These rows are that data.
+    3. **XP the server can trust.** Completion sums the XP recorded here rather
+       than accepting a score from the client.
+
+    Storing ``submitted`` costs little and makes an attempt reviewable — useful
+    for debugging a disputed grading, and the raw material for a "review your
+    mistakes" screen later.
+    """
+
+    __tablename__ = "lesson_attempt_answers"
+    __table_args__ = (
+        # The whole point of the table. One answer per exercise per attempt.
+        UniqueConstraint(
+            "attempt_id", "exercise_id", name="uq_answer_attempt_exercise"
+        ),
+        Index("ix_lesson_attempt_answers_attempt_id", "attempt_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    attempt_id: Mapped[int] = mapped_column(
+        ForeignKey("lesson_attempts.id", ondelete="CASCADE"), nullable=False
+    )
+    exercise_id: Mapped[int] = mapped_column(
+        ForeignKey("exercises.id", ondelete="CASCADE"), nullable=False
+    )
+
+    # What the learner sent, stored verbatim as JSON. Shapes differ per exercise
+    # type, and the grader is the only thing that needs to interpret them.
+    submitted: Mapped[dict[str, Any]] = mapped_column(
+        JSON, default=dict, nullable=False
+    )
+    is_correct: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    # XP this answer is worth. Recorded now, credited to user_stats only at
+    # completion -- see the XP ownership table in CODEBASE_LEARNING.md.
+    xp_earned: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    hearts_lost: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    answered_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    attempt: Mapped[LessonAttempt] = relationship(back_populates="answers")
+
+
+class LessonAttemptPair(Base):
+    """One pair the learner tried to match, in one match-pairs exercise.
+
+    **Why this table exists (Phase 9).** Match pairs used to be graded like every
+    other exercise: build the whole mapping, press Check, get one verdict. The
+    Duolingo interaction grades each pair the moment it is formed, which needs a
+    record per *pair submission* — and ``lesson_attempt_answers`` cannot hold
+    that, because ``UNIQUE(attempt_id, exercise_id)`` allows exactly one row per
+    exercise.
+
+    **Why not store the progress as JSON in that one row instead.** It would work
+    and it would need no migration, but idempotency would then rest on the
+    service reading and rewriting a JSON blob — two racing double-click requests
+    could both read "not yet charged" and both deduct a heart. The whole reason
+    ``lesson_attempt_answers`` has a unique constraint is that the database, not
+    the service, is what actually guarantees idempotency. The same argument
+    applies here, so the same mechanism is used.
+
+    **The uniqueness rule is on the submission, not on the left item.** A learner
+    may try ``l1 → r2`` (wrong, one heart), then ``l1 → r3`` (right). Those are
+    two different attempts at the same left item and both must be recorded. What
+    must never happen twice is the *same* pair being charged twice, which is
+    exactly ``UNIQUE(attempt_id, exercise_id, left_id, right_id)``.
+
+    **This table does not replace the exercise-level answer row.** When the last
+    pair is matched, the service writes the usual ``lesson_attempt_answers`` row,
+    so completion, XP and accuracy all work exactly as before and there is no
+    second lesson engine.
+    """
+
+    __tablename__ = "lesson_attempt_pairs"
+    __table_args__ = (
+        # One charge per distinct submission. A retried request finds the row and
+        # replays its verdict instead of grading — and losing a second heart.
+        UniqueConstraint(
+            "attempt_id",
+            "exercise_id",
+            "left_id",
+            "right_id",
+            name="uq_pair_attempt_exercise_pair",
+        ),
+        Index(
+            "ix_lesson_attempt_pairs_attempt_exercise", "attempt_id", "exercise_id"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    attempt_id: Mapped[int] = mapped_column(
+        ForeignKey("lesson_attempts.id", ondelete="CASCADE"), nullable=False
+    )
+    exercise_id: Mapped[int] = mapped_column(
+        ForeignKey("exercises.id", ondelete="CASCADE"), nullable=False
+    )
+
+    # The ids from the exercise's public payload ("l1", "r3"), not database ids.
+    left_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    right_id: Mapped[str] = mapped_column(String(32), nullable=False)
+
+    is_correct: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    hearts_lost: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    answered_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    attempt: Mapped[LessonAttempt] = relationship()

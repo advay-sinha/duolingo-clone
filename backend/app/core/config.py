@@ -45,6 +45,50 @@ class Settings(BaseSettings):
     # become a permissive production config.
     cors_origins: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
 
+    # --- gamification ---------------------------------------------------------
+    # Every tunable number in the game lives here, so no service body contains a
+    # magic constant and "what if XP were 15?" is a one-line change.
+    xp_per_correct_answer: int = 10
+    max_hearts: int = 5
+    hearts_lost_per_mistake: int = 1
+    # One heart back per this many minutes, applied lazily on read rather than
+    # by a scheduler -- see services/gamification.regenerate_hearts.
+    heart_regen_minutes: int = 30
+    leaderboard_limit: int = 25
+    default_daily_goal: int = 30
+
+    # --- authentication -------------------------------------------------------
+    # The cookie the session token travels in. HttpOnly and SameSite are set on
+    # the response in `routes/auth.py`; these are the parts worth configuring.
+    session_cookie_name: str = "duolingo_session"
+    session_lifetime_days: int = 14
+    # Off for local http development. A deployment over https must set this, or
+    # the cookie will travel in the clear.
+    session_cookie_secure: bool = False
+    # bcrypt's cost factor: work doubles per increment. 12 is a sensible 2020s
+    # default for a login people wait on. The test suite lowers it to 4 via the
+    # environment -- a password hash is *designed* to be slow, and paying 250ms
+    # of that per test would turn a fast suite into a slow one without testing
+    # anything extra. Lowering it in tests is standard practice (Django ships
+    # the same knob) and is safe precisely because the cost is recorded inside
+    # each hash string, so production hashes are unaffected.
+    bcrypt_rounds: int = 12
+
+    # --- seeded demo learner --------------------------------------------------
+    # The learner the seed creates, kept from Phase 2 as a convenient demo
+    # account. It is now a *normal* account: it has a password hash and logs in
+    # through the same endpoint as anyone else. It is no longer the runtime
+    # identity mechanism -- `get_current_user` resolves a session, and does not
+    # know this setting exists.
+    #
+    # The password is configuration, not a committed literal: set
+    # DEMO_USER_PASSWORD in backend/.env to choose your own. The default exists
+    # so a fresh clone can be logged into without ceremony, and is safe only
+    # because this database is local and holds nothing but practice Spanish.
+    demo_username: str = "learner"
+    demo_email: str = "learner@example.com"
+    demo_user_password: str = "duolingo123"
+
     # --- database -------------------------------------------------------------
     # One source of truth for where the data lives. Every other module asks
     # settings for this rather than building a path of its own, so pointing the

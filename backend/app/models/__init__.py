@@ -5,6 +5,7 @@ Importing this package imports every model, which is what registers them on
 SQLAlchemy will create only the tables it happens to have seen.
 """
 
+from app.models.achievement import Achievement, UserAchievement
 from app.models.content import (
     Course,
     Exercise,
@@ -13,18 +14,28 @@ from app.models.content import (
     Skill,
     Unit,
 )
-from app.models.progress import LessonAttempt, UserSkillProgress
-from app.models.user import User, UserStats
+from app.models.progress import (
+    LessonAttempt,
+    LessonAttemptAnswer,
+    LessonAttemptPair,
+    UserSkillProgress,
+)
+from app.models.user import Session, User, UserStats
 
 __all__ = [
+    "Achievement",
     "Course",
     "Exercise",
     "ExerciseType",
     "Lesson",
     "LessonAttempt",
+    "LessonAttemptAnswer",
+    "LessonAttemptPair",
+    "Session",
     "Skill",
     "Unit",
     "User",
+    "UserAchievement",
     "UserSkillProgress",
     "UserStats",
 ]
