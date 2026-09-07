@@ -1,0 +1,31 @@
+# --- Python / backend ---
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.db
+*.sqlite3
+
+# --- Node / frontend ---
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+next-env.d.ts
+
+# --- environment ---
+# Real values stay local; the committed .env.example files document the keys.
+.env
+.env.local
+.env.*.local
+
+# --- editors / OS ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+prompt.txt
+CLAUDE.md
+docs/
+stitch/
