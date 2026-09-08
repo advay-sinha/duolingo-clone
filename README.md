@@ -3,7 +3,13 @@
 A gamified language-learning web app — Duolingo's learning path, lesson player and
 progression systems — built as a 24-hour full-stack assignment.
 
-**Current status: Phase 10 complete — feature-complete, and prepared for
+**Current status: Phase 10.3 — feature-complete and deployed, with the
+production database on Turso/libSQL.** The assignment's SQLite implementation is
+unchanged and is still what runs locally and in every test; only the *deployed*
+database moved, because a serverless filesystem cannot host a SQLite file. See
+[Production database — the SQLite deployment note](#production-database--the-sqlite-deployment-note).
+
+**Phase 10 background — feature-complete, and prepared for
 deployment.** Phase 10 added Alembic migrations that adopt an existing database
 without losing a row, login rate limiting, environment profiles that refuse to
 boot an unsafe production config, and a same-origin deployment architecture that
@@ -39,7 +45,8 @@ goes straight to `/learn`, exactly as before.
 | Config | pydantic-settings | 2.13.1 |
 | Backend tests | pytest + FastAPI TestClient | 8.4.2 |
 | Frontend tests | Node's built-in runner (`node --test`) for pure logic; Vitest + jsdom + Testing Library for components | — / 3.x |
-| Database | SQLite (stdlib `sqlite3` driver) | — |
+| Database (local) | SQLite (stdlib `sqlite3` driver) | — |
+| Database (production) | Turso / libSQL, via the `sqlite+libsql` SQLAlchemy dialect | 0.2.0 |
 | ORM | SQLAlchemy 2.0 (declarative, synchronous) | 2.0.52 |
 | Migrations | Alembic | 1.19.2 |
 | Password hashing | bcrypt | 5.0.0 |
@@ -1184,6 +1191,196 @@ green 2.09:1, blue 2.44:1, red 3.30:1 (measured from the actual tokens). These
 are the primary buttons and the reference design's colours; changing them enough
 to pass would visibly change the product. The failure is recorded rather than
 fixed, and rather than hidden.
+
+---
+
+## Production database — the SQLite deployment note
+
+**Read this before concluding that the project abandoned SQLite. It did not.**
+
+This project was built with **SQLite**, as the assignment specifies. SQLite is
+still the database for local development, still what every one of the 421 backend
+tests runs against, and still what the schema, the models and the migrations are
+written for. Clone the repository, run the two commands under
+[How to start the backend](#how-to-start-the-backend), and you get SQLite — no
+account, no signup, no cloud service.
+
+What changed is **where the deployed copy stores its data**, and only because of
+the hosting environment.
+
+### What went wrong
+
+The deployed backend answered `GET /api/v1/health` with `200 {"status":"ok"}` and
+then returned **500** from the first endpoint that touched the database:
+
+```
+POST /api/v1/auth/register  →  500
+sqlite3.OperationalError: unable to open database file
+```
+
+`/health` passed because it runs no query, and `create_engine()` is lazy — it
+does not open the database until something asks it to. So the application
+*started* perfectly and failed at the first real use.
+
+The cause was the filesystem. A serverless function's disk is read-only apart
+from `/tmp`, and `/tmp` is per-instance and discarded between invocations. SQLite
+needs a durable, writable directory. It had neither.
+
+### What we did about it
+
+| Option | Verdict |
+|---|---|
+| SQLite file on the function's own filesystem | **Impossible.** Read-only — this is the failure above |
+| SQLite file in `/tmp` | **Rejected.** It would stop the 500 and silently lose data: `/tmp` is per-instance and wiped on every cold start, so a learner could register and be logged out moments later, and two visitors could get two different databases. An app that *looks* like it works while losing accounts is worse than one that errors |
+| Move to PostgreSQL | **Rejected.** A larger departure from the assignment than the problem warrants, and it would mean a different SQL dialect, a different driver and a migration of the whole schema — to solve a *hosting* problem |
+| **Hosted libSQL (Turso)** | **Chosen.** Provides persistent storage while keeping the SQLite-oriented relational model, the SQLAlchemy layer, and every model, repository and service unchanged |
+
+### What this means precisely
+
+> **The deployed production database is Turso/libSQL, not a literal SQLite file.**
+
+That distinction matters and this README will not blur it. libSQL is a fork of
+SQLite and is **SQLite-compatible** — the same SQL dialect, the same schema, the
+same semantics — but it is a hosted service reached over the network, not a file
+on disk. Saying "production uses SQLite" would be untrue.
+
+```
+Local development     FastAPI → SQLAlchemy → SQLite  (backend/duolingo.db)
+Production            FastAPI → SQLAlchemy → Turso / libSQL
+```
+
+**FastAPI, SQLAlchemy, the service layer, the repository layer, the schema, the
+migrations and the API contracts are all unchanged.** The application does not
+know which of the two it is talking to; the difference is one environment
+variable naming a different driver:
+
+```bash
+# local
+DATABASE_URL=sqlite:///.../backend/duolingo.db
+
+# production
+DATABASE_URL=sqlite+libsql://<db>-<org>.turso.io/?authToken=<token>&secure=true
+```
+
+Note the dialect — `sqlite+libsql`. SQLAlchemy still generates SQLite SQL.
+
+**This is a deployment adaptation forced by the hosting environment, not a
+redesign of the backend architecture.** The original SQLite implementation is
+unchanged and remains in the repository and its history; nothing was removed.
+
+### Why FastAPI was kept
+
+Nothing was wrong with it. The backend starts, routes correctly, validates,
+authenticates and returns the right status codes — `/health` proved that
+throughout. Replacing a working framework to fix a storage problem would have
+been the wrong repair.
+
+---
+
+## Setting up the production database (Turso)
+
+**Status: CONFIGURATION REQUIRED.** The code supports this; the Turso database
+must be created by you. No credentials exist in this repository and none should.
+
+### 1. Create the database
+
+```bash
+# https://docs.turso.tech — install the CLI, then:
+turso auth signup
+turso db create duolingo-clone
+turso db show duolingo-clone --url        # → libsql://duolingo-clone-<org>.turso.io
+turso db tokens create duolingo-clone     # → the auth token; treat it as a secret
+```
+
+### 2. Load the schema and seed content
+
+The backend's migration and seed commands are Python, and the libSQL driver has
+**no Windows wheel** — so on Windows you cannot run them against Turso directly.
+The portable route works everywhere and is what these steps use: build the
+database locally, export it as SQL, and load that.
+
+```bash
+cd backend
+
+# a) build a clean database locally (schema + course content + demo learner)
+rm -f /tmp/fresh.db
+DATABASE_URL="sqlite:////tmp/fresh.db" python -m app.db.migrate
+DATABASE_URL="sqlite:////tmp/fresh.db" python -m app.db.seed
+
+# b) export it as portable SQL
+python -c "import sqlite3; \
+open('seed.sql','w',encoding='utf-8').writelines(l+'\n' for l in sqlite3.connect('/tmp/fresh.db').iterdump())"
+
+# c) load it into Turso
+turso db shell duolingo-clone < seed.sql
+```
+
+**Do not dump `backend/duolingo.db`.** That is your development database and it
+contains real accounts and bcrypt password hashes. Step (a) builds a clean one
+for exactly this reason.
+
+On Linux or macOS you can skip the dump and point the commands straight at Turso:
+
+```bash
+export DATABASE_URL="sqlite+libsql://<db>-<org>.turso.io/?authToken=<token>&secure=true"
+python -m app.db.migrate
+python -m app.db.seed        # idempotent — safe to re-run
+```
+
+### 3. Configure the backend
+
+Set these on the backend deployment. **Never commit the token, and never give it
+a `NEXT_PUBLIC_` name** — that would publish a database credential to every
+visitor's browser.
+
+```
+ENVIRONMENT=production
+DATABASE_URL=sqlite+libsql://<db>-<org>.turso.io/?authToken=<token>&secure=true
+SESSION_COOKIE_SECURE=true
+TRUST_PROXY_HEADERS=true
+CORS_ORIGINS=
+DEMO_USER_PASSWORD=<something only you know>
+```
+
+`CORS_ORIGINS` stays **empty**: the browser talks to the frontend's own origin
+and Next.js rewrites `/api/v1/*` to the backend, so no cross-origin request
+exists. Nothing about that changes here.
+
+### 4. Verify — and do not stop at `/health`
+
+```bash
+B=https://<your-backend>
+
+curl $B/api/v1/health                       # 200 {"status":"ok"}   ← proves nothing about the DB
+curl $B/api/v1/courses                      # 200 with the course list ← first real query
+curl -X POST $B/api/v1/auth/register \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"you@example.com","password":"password123","display_name":"You"}'
+                                            # 201
+curl -X POST $B/api/v1/auth/login -c c.txt \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"you@example.com","password":"password123"}'
+                                            # 200
+curl -b c.txt $B/api/v1/users/me/stats      # 200
+```
+
+**Then prove persistence**, which is the whole point of the change: complete a
+lesson, wait for a new serverless invocation (or redeploy), and read the stats
+again. The XP must still be there. `/health` returning 200 is not evidence that
+any of this works — that is precisely the mistake that hid this bug.
+
+### Honest limitations
+
+- **SQLite/libSQL is right for this application and not for arbitrary scale.**
+  One writer at a time. For a single-instance learning app with short, infrequent
+  writes that is genuinely fine; it is a ceiling, not a tuning problem.
+- **Every query is now a network round trip.** A local SQLite read is
+  microseconds; a hosted libSQL read is a network call. Fine here, and worth
+  knowing.
+- **PostgreSQL is the natural next step** if real concurrency ever arrives — and
+  because everything goes through SQLAlchemy, that is a `DATABASE_URL` change and
+  an Alembic run, not a rewrite. Do not attempt to solve scale with several
+  SQLite replicas.
 
 ---
 

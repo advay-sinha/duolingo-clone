@@ -28,6 +28,10 @@ def production(**overrides) -> Settings:
         "demo_user_password": "a-real-password",
         "cors_origins": [],
         "database_echo": False,
+        # A hosted libSQL URL: the Phase 10.3 production database. Without this
+        # the default (a file inside the app directory) would now be refused, and
+        # every test in this file would fail for the wrong reason.
+        "database_url": "sqlite+libsql://db-org.turso.io/?authToken=t&secure=true",
     }
     return Settings(**{**safe, **overrides})
 
@@ -302,6 +306,91 @@ def test_the_production_localhost_check_still_works_from_the_environment(
         )
 
     assert "CORS_ORIGINS" in problems_from(exc)
+
+
+# --------------------------------------------------------------------------
+# The production database URL
+#
+# These exist because of the second real production outage: the deployed backend
+# answered GET /health with 200 and then returned 500 from the first endpoint
+# that touched the database --
+#     sqlite3.OperationalError: unable to open database file
+# -- because DATABASE_URL was still the built-in default, a file inside the
+# deployed application directory, on a filesystem that is neither writable nor
+# durable. Nothing objected until a learner tried to register.
+#
+# The check turns that into a refusal to start. See ADR-81.
+# --------------------------------------------------------------------------
+
+
+def test_production_refuses_a_database_inside_the_application_directory() -> None:
+    """The exact configuration that failed in production."""
+    from app.core.config import DEFAULT_SQLITE_URL
+
+    with pytest.raises(ValidationError) as exc:
+        production(database_url=DEFAULT_SQLITE_URL)
+
+    message = problems_from(exc)
+    assert "DATABASE_URL" in message
+    assert "unable to open database file" in message
+
+
+def test_production_refuses_a_relative_sqlite_path() -> None:
+    """`sqlite:///./duolingo.db` resolves inside the app directory too."""
+    with pytest.raises(ValidationError) as exc:
+        production(database_url="sqlite:///./duolingo.db")
+
+    assert "DATABASE_URL" in problems_from(exc)
+
+
+def test_production_accepts_a_hosted_libsql_url() -> None:
+    """`sqlite+libsql://` is a network dialect — nothing is stored on the host.
+
+    This is the production configuration from Phase 10.3: SQLAlchemy still
+    generates SQLite SQL, only the driver differs.
+    """
+    settings = production(
+        database_url="sqlite+libsql://db-org.turso.io/?authToken=token&secure=true"
+    )
+
+    assert settings.database_url.startswith("sqlite+libsql://")
+
+
+def test_production_accepts_a_file_on_a_persistent_volume() -> None:
+    """A deliberate absolute path outside the app directory is an operator's
+    decision, not a mistake. Refusing it would be a false positive, and false
+    positives are how safety checks get switched off."""
+    assert production(database_url="sqlite:////data/duolingo.db")
+
+
+def test_development_is_unaffected_by_the_database_check() -> None:
+    """The default local file must keep working with no configuration at all."""
+    from app.core.config import DEFAULT_SQLITE_URL
+
+    assert Settings().database_url == DEFAULT_SQLITE_URL
+    assert Settings(database_url=DEFAULT_SQLITE_URL).is_production is False
+
+
+def test_the_local_sqlite_default_is_still_a_plain_sqlite_file() -> None:
+    """Guards the assignment requirement: local development is SQLite.
+
+    Phase 10.3 changed the *production* database only. If this ever stops being
+    a `sqlite://` file URL, the local development story has changed and that
+    needs to be a deliberate decision.
+    """
+    from app.core.config import DEFAULT_SQLITE_URL
+
+    assert DEFAULT_SQLITE_URL.startswith("sqlite:///")
+    assert DEFAULT_SQLITE_URL.endswith("duolingo.db")
+
+
+def test_an_unparseable_database_url_is_not_this_checks_problem() -> None:
+    """It must not mask a different error with a confusing one of its own."""
+    from app.core.config import _is_local_sqlite_file
+
+    assert _is_local_sqlite_file("nonsense") is False
+    assert _is_local_sqlite_file("postgresql://host/db") is False
+    assert _is_local_sqlite_file("sqlite:///:memory:") is False
 
 
 # --------------------------------------------------------------------------

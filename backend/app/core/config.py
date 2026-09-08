@@ -14,6 +14,7 @@ from typing import Annotated
 from urllib.parse import urlparse
 
 from pydantic import field_validator, model_validator
+from sqlalchemy.engine import make_url
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 # backend/app/core/config.py -> backend/
@@ -30,6 +31,60 @@ DEFAULT_SQLITE_URL = f"sqlite:///{(BACKEND_DIR / 'duolingo.db').as_posix()}"
 #: still the value everyone can read in the repository?" is the question worth
 #: asking, and it needs the literal in one place.
 _DEFAULT_DEMO_PASSWORD = "duolingo123"
+
+
+def _is_local_sqlite_file(database_url: str) -> bool:
+    """Whether this URL is a SQLite database stored on the local filesystem.
+
+    **This check exists because of a real production outage.** The deployed
+    backend answered ``GET /health`` with 200 and then returned 500 from the
+    first endpoint that touched the database:
+    ``sqlite3.OperationalError: unable to open database file``. The cause was a
+    local-file SQLite URL on a serverless filesystem that is neither writable nor
+    durable, and nothing in the application objected until a learner tried to
+    register. Turning it into a refusal to start moves the discovery from "a user
+    hit an error" to "the deploy failed loudly" (ADR-81, and the same reasoning as
+    every other check in `_validate_production`).
+
+    **The check is deliberately narrow: it fires only when the database file sits
+    inside the deployed application directory** — that is, when nobody chose a
+    path and the built-in default applied. That is exactly the mistake that
+    caused the outage, and it is never right in production.
+
+    A file elsewhere is left alone, because it is a deliberate operator decision
+    this function cannot second-guess: ``sqlite:////data/duolingo.db`` on a
+    mounted volume is a perfectly good production database, and refusing it would
+    be a false positive that teaches people to disable the check.
+
+    ``sqlite+libsql://`` is not a local file at all — it is the hosted libSQL
+    dialect, which reaches Turso over the network and stores nothing on this
+    host. In-memory databases are excluded for the obvious reason.
+    """
+    try:
+        url = make_url(database_url)
+    except Exception:
+        # An unparseable URL is a different problem, reported by whatever tries
+        # to connect. This check has nothing useful to say about it.
+        return False
+
+    if url.get_backend_name() != "sqlite":
+        return False
+
+    # sqlite+libsql:// and friends are network dialects, not files on this host.
+    # `make_url` splits the driver out for us, so no string surgery is needed --
+    # which matters, because "sqlite:///relative" and "sqlite:////absolute"
+    # differ by a single slash and are easy to mishandle by hand.
+    if url.get_driver_name() not in ("pysqlite", ""):
+        return False
+
+    database = url.database
+    if not database or database == ":memory:":
+        return False
+
+    try:
+        return Path(database).resolve().is_relative_to(BACKEND_DIR)
+    except (OSError, ValueError):
+        return False
 
 
 def _validate_origin(origin: str) -> str:
@@ -345,6 +400,17 @@ class Settings(BaseSettings):
             problems.append(
                 "DATABASE_ECHO must be off in production: it writes every SQL "
                 "statement, including parameters, to the logs."
+            )
+
+        if _is_local_sqlite_file(self.database_url):
+            problems.append(
+                "DATABASE_URL points at a local SQLite file "
+                f"({self.database_url!r}). A serverless or container filesystem "
+                "is not durable, so learner accounts and progress would be lost "
+                "on every restart or cold start -- and on a read-only filesystem "
+                "the first query fails with 'unable to open database file'. Set a "
+                "hosted libSQL/Turso URL (sqlite+libsql://...) or point at a "
+                "persistent volume."
             )
 
         if any("localhost" in origin for origin in self.cors_origins):

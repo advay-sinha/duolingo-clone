@@ -10,6 +10,26 @@ alembic==1.19.2           # schema migrations. Adopted in Phase 10 (ADR-73) once
                           # what a schema with data behind it needs. SQLite gets
                           # `render_as_batch` in env.py, without which anything
                           # beyond "add a column" cannot be migrated at all.
+# --- production database driver (Phase 10.3, ADR-81) ----------------------
+# Connects SQLAlchemy to a hosted libSQL/Turso database via the
+# `sqlite+libsql://` dialect. Needed ONLY in the deployed environment: local
+# development and the whole test suite use the standard library `sqlite3`
+# driver and never import this.
+#
+# **The platform marker is not a style choice.** `sqlalchemy-libsql` pulls in
+# `libsql-experimental`, a Rust extension that publishes wheels for Linux and
+# macOS but **none for Windows**. Without the marker, `pip install -r
+# requirements.txt` on a Windows machine tries to build it from source, needs a
+# Rust toolchain, and fails -- so a Windows reviewer could not run the project
+# at all. The marker keeps `pip install -r requirements.txt` working everywhere
+# while still installing the driver on Vercel, which is Linux.
+#
+# A Windows developer therefore cannot connect to Turso directly. That is
+# deliberate and does not block anything: local development uses SQLite, and the
+# one-time Turso schema/seed load is done with the Turso CLI from a SQL dump --
+# see "Loading the schema into Turso" in the README.
+sqlalchemy-libsql==0.2.0; sys_platform != "win32"
+
 bcrypt==5.0.0             # password hashing. Adaptive and self-salting -- a password
                           # hash must be *slow*, which is exactly what a general-purpose
                           # digest is not. Sessions need no library: `secrets` for the
