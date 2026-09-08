@@ -107,7 +107,7 @@ duolingo/
 │   ├── alembic/
 │   │   ├── env.py                one source of truth for which DB is migrated
 │   │   └── versions/0001_baseline.py   the Phase 9.5 schema, as a starting line
-│   ├── tests/                    401 tests
+│   ├── tests/                    414 tests
 │   │   ├── conftest.py               isolated test database via dependency override
 │   │   ├── test_health.py  test_database.py
 │   │   ├── test_api_courses.py  test_api_path.py  test_api_users.py
@@ -1272,7 +1272,7 @@ up — not signed and verified — so there is no key to manage, rotate or leak.
 | `LOGIN_MAX_ATTEMPTS` | `5` | Failed logins per (email, IP) per window. |
 | `LOGIN_WINDOW_SECONDS` | `300` | |
 | `TRUST_PROXY_HEADERS` | `false` | **Set true in production**, where a platform proxy overwrites `X-Forwarded-For`. See the warning below. |
-| `CORS_ORIGINS` | localhost pair | **Set to `[]` in production** — the rewrite means no cross-origin request exists. |
+| `CORS_ORIGINS` | localhost pair | **Leave empty in production** — the rewrite means no cross-origin request exists. Accepts a comma-separated list, a single origin, JSON, or empty. See below. |
 | `DEMO_USER_PASSWORD` | `duolingo123` | **Production refuses to start while this is the committed default.** |
 | `DATABASE_ECHO` | `false` | Refused in production: it logs SQL parameters. |
 
@@ -1289,6 +1289,34 @@ machine for the API — with no error anywhere. That failure actually happened
 during Phase 9.5 verification and looked like an application bug for several
 minutes. The browser now needs no configuration at all, which is the only
 reliable way not to forget it.
+
+### `CORS_ORIGINS` — accepted formats
+
+All four of these are valid:
+
+```bash
+CORS_ORIGINS=                                            # no cross-origin access
+CORS_ORIGINS=https://my-app.vercel.app                   # one origin
+CORS_ORIGINS=https://a.example.com,https://b.example.com # several
+CORS_ORIGINS=["https://a.example.com"]                   # JSON, still supported
+```
+
+Each entry must be a bare **origin** — scheme + host + optional port. A path or a
+query is refused with a message naming what to use instead, and a trailing slash
+is normalised away: `https://app.example.com/` never matches the `Origin` header,
+which the browser compares as an exact string, so it fails *silently* and looks
+like a broken app rather than a mistyped setting. `*` is refused outright — a
+wildcard origin and credentialed requests are incompatible, and this API
+authenticates with a cookie.
+
+**Empty means no cross-origin access, never "allow everything."** Reading a blank
+box as a wildcard would turn a typo into an open API.
+
+> This was a real production failure. `pydantic-settings` treats `list[str]` as
+> JSON and decodes it *before* validation, so a plain URL — or an empty value —
+> used to crash the app at import with
+> `SettingsError: error parsing value for field "cors_origins"`. See
+> [§16.8 of the learning document](docs/CODEBASE_LEARNING.md) for the mechanism.
 
 > ⚠️ **`TRUST_PROXY_HEADERS` is a security setting, not a convenience one.**
 > `X-Forwarded-For` is attacker-controlled unless a proxy overwrites it. Turned on
@@ -1455,7 +1483,7 @@ ENVIRONMENT=production
 DATABASE_URL=sqlite:////data/duolingo.db
 SESSION_COOKIE_SECURE=true
 TRUST_PROXY_HEADERS=true
-CORS_ORIGINS=[]
+CORS_ORIGINS=
 DEMO_USER_PASSWORD=<something only you know>
 
 # On each release, before the new version serves traffic:
@@ -1590,7 +1618,7 @@ not happen — is worse than the gap itself.
 ## Tests
 
 ```bash
-cd backend  && .venv/Scripts/python.exe -m pytest       # 401 tests
+cd backend  && .venv/Scripts/python.exe -m pytest       # 414 tests
 cd frontend && npm test                                 # 130 pure-logic + 97 component tests
 cd frontend && npm run test:unit                        # 130 pure-logic only (node --test)
 cd frontend && npm run test:components                  # 97 component only (vitest)

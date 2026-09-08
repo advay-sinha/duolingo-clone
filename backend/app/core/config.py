@@ -7,11 +7,14 @@ startup on a bad value rather than silently at request time.
 """
 
 import enum
+import json
 from functools import lru_cache
 from pathlib import Path
+from typing import Annotated
+from urllib.parse import urlparse
 
-from pydantic import model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import field_validator, model_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 # backend/app/core/config.py -> backend/
 BACKEND_DIR = Path(__file__).resolve().parents[2]
@@ -27,6 +30,50 @@ DEFAULT_SQLITE_URL = f"sqlite:///{(BACKEND_DIR / 'duolingo.db').as_posix()}"
 #: still the value everyone can read in the repository?" is the question worth
 #: asking, and it needs the literal in one place.
 _DEFAULT_DEMO_PASSWORD = "duolingo123"
+
+
+def _validate_origin(origin: str) -> str:
+    """Check one CORS origin and return it normalised.
+
+    An *origin* is scheme + host + optional port, and nothing else — no path, no
+    query, no trailing slash. The browser compares the `Origin` header against
+    this list as an exact string, so `https://app.example.com/` (with a slash)
+    silently matches nothing at all. That is the failure worth catching here:
+    it is not an error anywhere, it simply means every cross-origin request is
+    rejected, which looks like a bug in the application rather than a typo in
+    configuration.
+
+    Raises:
+        ValueError: naming the offending value and what is wrong with it. This is
+            the "deliberate validation error with a useful message" the fix is
+            for — as opposed to the JSONDecodeError it replaces.
+    """
+    if origin == "*":
+        raise ValueError(
+            'CORS_ORIGINS may not contain "*". A wildcard origin and '
+            "credentialed requests are incompatible by specification, and this "
+            "API authenticates with a cookie — the browser would reject every "
+            "response. List the exact origins instead."
+        )
+
+    parsed = urlparse(origin)
+
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(
+            f"CORS_ORIGINS entry {origin!r} must start with http:// or https:// "
+            f"(an origin is scheme + host + optional port)."
+        )
+    if not parsed.netloc:
+        raise ValueError(f"CORS_ORIGINS entry {origin!r} has no host.")
+    if parsed.path not in ("", "/") or parsed.query or parsed.fragment:
+        raise ValueError(
+            f"CORS_ORIGINS entry {origin!r} must be an origin, not a URL: no "
+            f"path, query or fragment. Use {parsed.scheme}://{parsed.netloc}"
+        )
+
+    # A trailing slash is the single most common way to get this wrong, and it
+    # fails silently rather than loudly, so it is normalised rather than refused.
+    return f"{parsed.scheme}://{parsed.netloc}"
 
 
 class Environment(str, enum.Enum):
@@ -77,7 +124,109 @@ class Settings(BaseSettings):
     # The exact origins the browser is allowed to call this API from. Kept as a
     # narrow list rather than "*" so the development config does not quietly
     # become a permissive production config.
-    cors_origins: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
+    #
+    # `NoDecode` is the load-bearing part of this line. See `_parse_cors_origins`
+    # below for what it prevents.
+    cors_origins: Annotated[list[str], NoDecode] = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def _parse_cors_origins(cls, value: object) -> list[str]:
+        """Accept JSON, a comma-separated list, or nothing at all.
+
+        **The bug this fixes.** ``pydantic-settings`` treats any "complex" field
+        type — and ``list[str]`` is one — as JSON, calling ``json.loads()`` on the
+        raw environment string inside ``EnvSettingsSource`` *before* validation
+        runs. So a perfectly reasonable value typed into a deployment dashboard::
+
+            CORS_ORIGINS=https://my-app.vercel.app
+
+        never reaches a validator. It fails in the settings *source* with::
+
+            SettingsError: error parsing value for field "cors_origins"
+                           from source "EnvSettingsSource"
+
+        which names the field but not the format, and — because settings are built
+        at import time — surfaces as an application that will not start. An
+        **empty** value fails the same way, which is the sharp edge: this
+        project's own documentation recommends "no origins" for the deployment
+        topology it recommends, and the obvious way to express that in a dashboard
+        text box is to leave it blank.
+
+        ``NoDecode`` on the field turns that JSON step off, so the raw string
+        arrives here and this function decides what it means.
+
+        **Permissive about the container, strict about the contents.** How the
+        list is written is a matter of taste and of what a given dashboard makes
+        easy; what each entry *is* genuinely matters, because a wrong origin is
+        either a security hole or a broken app. So all three of these are
+        accepted:
+
+        ============================================ =========================
+        ``CORS_ORIGINS=["https://a.dev","https://b"]``  JSON — as before
+        ``CORS_ORIGINS=https://a.dev,https://b``        comma-separated
+        ``CORS_ORIGINS=``                               empty: no origins
+        ============================================ =========================
+
+        and every entry is then checked by :func:`_validate_origin`.
+
+        Empty means **no cross-origin access**, not "allow everything". That is a
+        deliberate and safe reading: it is the correct setting for the recommended
+        topology, where the frontend proxies the API under its own origin and no
+        cross-origin request exists. Reading it as "allow everything" would turn a
+        blank text box into an open API.
+        """
+        if value is None:
+            return []
+
+        if isinstance(value, (list, tuple)):
+            origins = [str(item).strip() for item in value]
+        elif isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return []
+            if text[0] in "[{":
+                # Looks like JSON, so it was meant as JSON: report *why* it did
+                # not parse rather than falling through to comma-splitting and
+                # producing a nonsense origin like `["https://a.dev"`. A leading
+                # `{` counts too — someone who wrote an object meant JSON, and
+                # "must be a list of origins" is a far better answer than
+                # "must start with http://".
+                try:
+                    parsed = json.loads(text)
+                except json.JSONDecodeError as exc:
+                    raise ValueError(
+                        f"CORS_ORIGINS looks like JSON but could not be parsed: "
+                        f"{exc}. Either fix the JSON — "
+                        f'["https://app.example.com","https://www.example.com"] — '
+                        f"or use the simpler comma-separated form: "
+                        f"https://app.example.com,https://www.example.com"
+                    ) from exc
+                if not isinstance(parsed, list):
+                    raise ValueError(
+                        f"CORS_ORIGINS must be a list of origins, got "
+                        f"{type(parsed).__name__}. Example: "
+                        f'["https://app.example.com"]'
+                    )
+                origins = [str(item).strip() for item in parsed]
+            else:
+                # Commas are the separator; newlines are tolerated because
+                # multi-line dashboard textareas add them.
+                origins = [
+                    part.strip()
+                    for part in text.replace("\n", ",").split(",")
+                ]
+        else:
+            raise ValueError(
+                f"CORS_ORIGINS must be a string or a list, got "
+                f"{type(value).__name__}."
+            )
+
+        # Drop blanks so a trailing comma is a typo rather than an error.
+        return [_validate_origin(origin) for origin in origins if origin]
 
     # --- gamification ---------------------------------------------------------
     # Every tunable number in the game lives here, so no service body contains a
