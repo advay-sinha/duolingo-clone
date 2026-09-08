@@ -33,6 +33,45 @@ DEFAULT_SQLITE_URL = f"sqlite:///{(BACKEND_DIR / 'duolingo.db').as_posix()}"
 _DEFAULT_DEMO_PASSWORD = "duolingo123"
 
 
+def _redact_url(database_url: str) -> str:
+    """Mask credentials in a database URL so it is safe to put in a message.
+
+    **This exists because of a real credential leak.** The `libsql://` check
+    below used to build the corrected URL and include it verbatim, so that a
+    developer could paste it straight into their dashboard. That was a good
+    intention and a bad idea: a hosted libSQL URL carries the database's auth
+    token as a query parameter, so the "helpful" error wrote a live read-write
+    credential into the platform's logs, where it is retained and widely
+    readable.
+
+    A configuration error must never print the configuration's secrets. The URL
+    still identifies itself — scheme, host and the shape of the fix are all
+    visible — but the token is replaced.
+    """
+    for key in ("authToken", "auth_token", "password", "token"):
+        marker = f"{key}="
+        while marker in database_url:
+            start = database_url.index(marker) + len(marker)
+            end = len(database_url)
+            for terminator in ("&", "#"):
+                position = database_url.find(terminator, start)
+                if position != -1:
+                    end = min(end, position)
+            if start == end:
+                break
+            database_url = database_url[:start] + "***" + database_url[end:]
+            if database_url[start : start + 3] == "***" and marker not in database_url[end:]:
+                break
+    # A userinfo section (scheme://user:secret@host) is a credential too.
+    if "://" in database_url and "@" in database_url.split("://", 1)[1]:
+        scheme, rest = database_url.split("://", 1)
+        userinfo, host = rest.split("@", 1)
+        if ":" in userinfo:
+            user = userinfo.split(":", 1)[0]
+            database_url = f"{scheme}://{user}:***@{host}"
+    return database_url
+
+
 def _is_local_sqlite_file(database_url: str) -> bool:
     """Whether this URL is a SQLite database stored on the local filesystem.
 
@@ -222,12 +261,15 @@ class Settings(BaseSettings):
           installed
         """
         if value.startswith("libsql://"):
-            corrected = f"sqlite+{value}"
+            # Redacted: a hosted libSQL URL carries the database auth token as a
+            # query parameter, and this message goes straight into the platform's
+            # logs. See `_redact_url`.
             raise ValueError(
                 "DATABASE_URL starts with 'libsql://', which is the scheme the "
                 "Turso CLI prints -- but SQLAlchemy has no 'libsql' backend, so "
-                "the application cannot start. libSQL is a *dialect of sqlite*, "
-                f"so prefix it with 'sqlite+':  {corrected}"
+                "the application cannot start. libSQL is a *dialect of sqlite*: "
+                "add the 'sqlite+' prefix, keeping the rest of the URL as it is. "
+                f"Yours becomes:  sqlite+{_redact_url(value)}"
             )
         return value
 
@@ -449,7 +491,8 @@ class Settings(BaseSettings):
         if _is_local_sqlite_file(self.database_url):
             problems.append(
                 "DATABASE_URL points at a local SQLite file "
-                f"({self.database_url!r}). A serverless or container filesystem "
+                f"({_redact_url(self.database_url)!r}). A serverless or container "
+                "filesystem "
                 "is not durable, so learner accounts and progress would be lost "
                 "on every restart or cold start -- and on a read-only filesystem "
                 "the first query fails with 'unable to open database file'. Set a "

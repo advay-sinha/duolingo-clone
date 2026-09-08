@@ -410,8 +410,44 @@ def test_the_turso_cli_url_scheme_is_refused_with_the_correction() -> None:
 
     message = problems_from(exc)
     assert "DATABASE_URL" in message
-    # The message must contain the corrected URL, ready to paste.
-    assert "sqlite+libsql://my-db-org.turso.io/?authToken=t" in message
+    assert "sqlite+" in message
+    # The host is shown so the message is recognisably about *your* URL...
+    assert "my-db-org.turso.io" in message
+
+
+def test_the_scheme_error_never_prints_the_auth_token() -> None:
+    """**A real credential leak, and the regression test for it.**
+
+    The first version of this message helpfully included the whole corrected URL
+    so it could be pasted straight into a dashboard. A hosted libSQL URL carries
+    the database's read-write auth token as a query parameter, so that wrote a
+    live credential into the platform's logs — where it is retained, widely
+    readable, and was then copied into a bug report.
+
+    A configuration error must never print the configuration's secrets.
+    """
+    token = "eyJhbGciOiJFZERTQSJ9.SECRETPAYLOAD.SECRETSIGNATURE"
+
+    with pytest.raises(ValidationError) as exc:
+        Settings(
+            database_url=f"libsql://my-db-org.turso.io/?authToken={token}&secure=true"
+        )
+
+    message = problems_from(exc)
+    assert "SECRETPAYLOAD" not in message
+    assert "SECRETSIGNATURE" not in message
+    assert "authToken=***" in message
+
+
+def test_redaction_covers_the_credential_forms_a_url_can_carry() -> None:
+    from app.core.config import _redact_url
+
+    assert _redact_url("sqlite+libsql://h/?authToken=abc123&secure=true") == (
+        "sqlite+libsql://h/?authToken=***&secure=true"
+    )
+    assert "abc123" not in _redact_url("postgresql://user:abc123@host/db")
+    # A URL with nothing to hide is returned unchanged.
+    assert _redact_url("sqlite:///./local.db") == "sqlite:///./local.db"
 
 
 def test_the_correct_libsql_scheme_is_accepted() -> None:
