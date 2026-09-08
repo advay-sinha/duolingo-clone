@@ -1259,7 +1259,8 @@ variable naming a different driver:
 DATABASE_URL=sqlite:///.../backend/duolingo.db
 
 # production
-DATABASE_URL=sqlite+libsql://<db>-<org>.turso.io/?authToken=<token>&secure=true
+DATABASE_URL=sqlite+libsql://<db>-<org>.turso.io/?secure=true
+TURSO_AUTH_TOKEN=<token>
 ```
 
 Note the dialect — `sqlite+libsql`. SQLAlchemy still generates SQLite SQL.
@@ -1299,12 +1300,19 @@ turso db tokens create duolingo-clone     # → the DATABASE token; treat it as 
 | `turso auth token` | Your **account/API** token — authenticates the CLI to Turso | ❌ never |
 | `turso db tokens create <db>` | The **database** token — grants access to one database | ✅ this one |
 
-There is **no separate token environment variable.** The token is a query
-parameter on `DATABASE_URL`, because that is what the `sqlite+libsql` dialect
-consumes — it strips the SQLAlchemy-specific keys and passes the rest to the
-driver, turning `sqlite+libsql://<host>/?authToken=<token>&secure=true` into an
-https connection to `<host>?authToken=<token>`. Do not create `TURSO_AUTH_TOKEN`;
-nothing reads it. **The whole `DATABASE_URL` is therefore a secret.**
+**The token is a separate variable, `TURSO_AUTH_TOKEN` — not part of the URL.**
+Turso's documentation writes the URL as `libsql://host?authToken=…`, and that
+does not work here: the driver takes the token as a keyword argument to
+`connect()` and never parses it from the query string, and the SQLAlchemy dialect
+does not forward it either. A token in the URL is silently dropped and Turso
+rejects the first query with `database: empty JWT token`. So:
+
+```
+DATABASE_URL=sqlite+libsql://<db>-<org>.turso.io/?secure=true
+TURSO_AUTH_TOKEN=<token>
+```
+
+`secure=true` stays in the URL — the dialect consumes it to select https.
 
 ### 2. Load the schema and seed content
 
@@ -1336,7 +1344,8 @@ for exactly this reason.
 On Linux or macOS you can skip the dump and point the commands straight at Turso:
 
 ```bash
-export DATABASE_URL="sqlite+libsql://<db>-<org>.turso.io/?authToken=<token>&secure=true"
+export DATABASE_URL="sqlite+libsql://<db>-<org>.turso.io/?secure=true"
+export TURSO_AUTH_TOKEN="<token>"
 python -m app.db.migrate
 python -m app.db.seed        # idempotent — safe to re-run
 ```
@@ -1376,7 +1385,8 @@ visitor's browser.
 
 ```
 ENVIRONMENT=production
-DATABASE_URL=sqlite+libsql://<db>-<org>.turso.io/?authToken=<token>&secure=true
+DATABASE_URL=sqlite+libsql://<db>-<org>.turso.io/?secure=true
+TURSO_AUTH_TOKEN=<token>
 SESSION_COOKIE_SECURE=true
 TRUST_PROXY_HEADERS=true
 CORS_ORIGINS=

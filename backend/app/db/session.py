@@ -21,9 +21,27 @@ settings = get_settings()
 # runs synchronous endpoints in a threadpool, so a connection created on one
 # thread may be used from another. SQLAlchemy's pool already serialises access,
 # so lifting SQLite's own guard is safe here.
-_connect_args = (
+_connect_args: dict[str, object] = (
     {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
 )
+
+# A hosted libSQL/Turso database authenticates with a token, and this is the only
+# route by which the driver can receive it.
+#
+# **Putting `?authToken=...` in the URL does not work**, even though Turso's own
+# documentation writes the URL that way. `libsql_experimental.connect()` takes
+# `auth_token` as a keyword argument -- its Rust entry point is
+# `open_remote_internal(database, auth_token, version)`, with `auth_token`
+# defaulting to `""` -- and it never parses the query string for it. The
+# SQLAlchemy dialect does not forward it either: it passes through only the
+# sqlite3-compatible connect arguments (`uri`, `timeout`, `isolation_level`,
+# `detect_types`, `check_same_thread`, `cached_statements`, `secure`).
+#
+# So a token in the URL is silently dropped, the connection is made anonymously,
+# and Turso rejects the first query with `empty JWT token` -- a failure that
+# looks like a database problem and is really an argument-passing one.
+if settings.database_url.startswith("sqlite+libsql") and settings.turso_auth_token:
+    _connect_args["auth_token"] = settings.turso_auth_token
 
 engine = create_engine(
     settings.database_url,

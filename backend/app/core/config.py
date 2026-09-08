@@ -437,6 +437,26 @@ class Settings(BaseSettings):
     # environment variable and no code change.
     database_url: str = DEFAULT_SQLITE_URL
 
+    #: Auth token for a hosted libSQL/Turso database. **A secret** — set it in
+    #: the hosting platform's environment, never in a committed file.
+    #:
+    #: **Why this is a separate variable and not part of DATABASE_URL**, which is
+    #: how Turso's own documentation writes it: the `libsql_experimental` driver
+    #: takes the token as a keyword argument to `connect()` and **never reads it
+    #: from the URL's query string**. Its Rust entry point is
+    #: `open_remote_internal(database, auth_token, version)`, with `auth_token`
+    #: defaulting to `""` — so a URL of the form `...?authToken=xyz` connects
+    #: with *no* credential and Turso answers `empty JWT token`. The SQLAlchemy
+    #: dialect does not forward it either; it only passes the handful of
+    #: sqlite3-compatible connect arguments.
+    #:
+    #: `app/db/session.py` therefore puts it in `connect_args`, which is the one
+    #: path that reaches the driver.
+    #:
+    #: A useful side effect: because the token is no longer part of the URL, a
+    #: message that quotes DATABASE_URL cannot leak it.
+    turso_auth_token: str = ""
+
     # Echo every SQL statement to stdout. Off by default; useful when learning
     # what the ORM actually emits.
     database_echo: bool = False
@@ -486,6 +506,16 @@ class Settings(BaseSettings):
             problems.append(
                 "DATABASE_ECHO must be off in production: it writes every SQL "
                 "statement, including parameters, to the logs."
+            )
+
+        if self.database_url.startswith("sqlite+libsql") and not self.turso_auth_token:
+            problems.append(
+                "DATABASE_URL is a hosted libSQL/Turso database but "
+                "TURSO_AUTH_TOKEN is not set. The driver takes the token as a "
+                "connect argument and ignores any `authToken=` in the URL, so "
+                "the connection would be made without a credential and every "
+                "query would fail with 'empty JWT token'. Create one with "
+                "`turso db tokens create <db>` and set TURSO_AUTH_TOKEN."
             )
 
         if _is_local_sqlite_file(self.database_url):

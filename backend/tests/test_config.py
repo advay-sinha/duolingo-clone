@@ -31,7 +31,10 @@ def production(**overrides) -> Settings:
         # A hosted libSQL URL: the Phase 10.3 production database. Without this
         # the default (a file inside the app directory) would now be refused, and
         # every test in this file would fail for the wrong reason.
-        "database_url": "sqlite+libsql://db-org.turso.io/?authToken=t&secure=true",
+        "database_url": "sqlite+libsql://db-org.turso.io/?secure=true",
+        # The token is a separate setting, not part of the URL -- see
+        # `test_production_requires_a_turso_token_when_using_libsql`.
+        "turso_auth_token": "a-token",
     }
     return Settings(**{**safe, **overrides})
 
@@ -464,6 +467,45 @@ def test_the_scheme_check_does_not_touch_ordinary_urls() -> None:
         "postgresql+psycopg://host/db",
     ):
         assert Settings(database_url=url).database_url == url
+
+
+def test_production_requires_a_turso_token_when_using_libsql() -> None:
+    """**The failure this prevents was diagnosed the hard way, in production.**
+
+    `libsql_experimental.connect()` takes `auth_token` as a keyword argument and
+    never reads it from the URL query string, and the SQLAlchemy dialect forwards
+    only the sqlite3-compatible connect args. So a URL of the form
+    `sqlite+libsql://host/?authToken=xyz` connects with **no credential**, and
+    Turso rejects the first query with `empty JWT token` — which reads like a
+    database fault and is really an argument-passing one.
+    """
+    with pytest.raises(ValidationError) as exc:
+        production(
+            database_url="sqlite+libsql://h.turso.io/?secure=true",
+            turso_auth_token="",
+        )
+
+    message = problems_from(exc)
+    assert "TURSO_AUTH_TOKEN" in message
+    assert "empty JWT token" in message
+
+
+def test_a_libsql_url_with_a_token_is_accepted() -> None:
+    assert production(
+        database_url="sqlite+libsql://h.turso.io/?secure=true",
+        turso_auth_token="a-token",
+    )
+
+
+def test_a_local_sqlite_url_needs_no_turso_token() -> None:
+    """The check must be specific to libSQL, or it would demand a Turso token
+    from anyone deploying to a host with a persistent volume."""
+    assert production(database_url="sqlite:////data/duolingo.db", turso_auth_token="")
+
+
+def test_the_token_is_not_required_outside_production() -> None:
+    """Local development must not need a Turso account for anything."""
+    assert Settings(database_url="sqlite+libsql://h.turso.io/").turso_auth_token == ""
 
 
 def test_an_unparseable_database_url_is_not_this_checks_problem() -> None:
