@@ -31,8 +31,23 @@ import { NextResponse, type NextRequest } from "next/server";
  * this file knows about `/onboarding` is that it needs a session.
  */
 
-/** Must match `session_cookie_name` in the backend's settings. */
-const SESSION_COOKIE = "duolingo_session";
+/**
+ * The session cookie's name.
+ *
+ * **Read from the environment because it has to agree with the backend.** The
+ * Phase 10 audit found this as a bare literal here and a setting
+ * (`SESSION_COOKIE_NAME`) there, with nothing keeping the two in step: renaming
+ * it on the backend alone would leave this file looking for a cookie that no
+ * longer exists, so every signed-in visitor would be bounced to `/login` while
+ * the API happily authenticated them. A silent, confusing half-failure.
+ *
+ * One variable now sets both. The default matches the backend's default, so
+ * neither side needs configuring for local development.
+ *
+ * Not `NEXT_PUBLIC_`: the proxy runs on the server, and the cookie's *name* is
+ * not something the browser bundle needs to know.
+ */
+const SESSION_COOKIE = process.env.SESSION_COOKIE_NAME ?? "duolingo_session";
 
 /** Routes that require a learner. Everything else is public. */
 const PROTECTED = ["/learn", "/leaderboard", "/profile", "/onboarding"];

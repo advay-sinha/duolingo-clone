@@ -30,6 +30,12 @@ class DomainError(Exception):
     status_code: int = 400
     code: str = "domain_error"
 
+    #: Extra HTTP headers this error should carry. Almost always empty — the
+    #: envelope is the response — but `Retry-After` on a 429 is genuinely part of
+    #: the answer rather than part of the message, and a header is where a client
+    #: looks for it.
+    headers: dict[str, str] | None = None
+
     def __init__(self, message: str) -> None:
         super().__init__(message)
         self.message = message
@@ -73,6 +79,26 @@ class ConflictError(DomainError):
 
     status_code = 409
     code = "conflict"
+
+
+class RateLimitedError(DomainError):
+    """Too many failed attempts from this caller. 429.
+
+    429 rather than reusing the 401, and the distinction is worth defending:
+    401 means "those credentials are wrong", and repeating it here would tell a
+    learner who mistyped their password five times that their sixth *correct*
+    attempt was also wrong. 429 says what actually happened and, with
+    ``Retry-After``, when to come back.
+
+    **It leaks nothing about whether an email exists**, which is the property the
+    login endpoint is built around. The limiter counts failures against
+    ``(email, IP)`` without ever consulting the users table, so an unknown address
+    and a known one are blocked after exactly the same number of attempts, with
+    exactly the same response.
+    """
+
+    status_code = 429
+    code = "rate_limited"
 
 
 class DemoUserMissingError(DomainError):

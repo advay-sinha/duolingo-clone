@@ -6,6 +6,8 @@ is pointed at the module-level ``app`` created at the bottom for convenience in
 development.
 """
 
+import logging
+
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,6 +17,10 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.api.v1.router import api_router
 from app.core.config import Settings, get_settings
 from app.core.errors import DomainError
+
+#: Application logger. Uvicorn configures the root handler, so this inherits its
+#: formatting and destination rather than installing a second logging setup.
+logger = logging.getLogger("app")
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -53,6 +59,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return JSONResponse(
             status_code=exc.status_code,
             content={"error": {"code": exc.code, "message": exc.message}},
+            # Almost always empty. `Retry-After` on a 429 is the exception: when
+            # to come back is part of the answer, and a header is where a client
+            # looks for it.
+            headers=exc.headers,
         )
 
     # FastAPI's own errors do not use the domain envelope by default: a
@@ -91,6 +101,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "error": {
                     "code": "http_error",
                     "message": str(exc.detail),
+                }
+            },
+        )
+
+    # The last gap in the envelope, closed in Phase 10. An *unhandled* exception
+    # was already safe -- Starlette answers `text/plain` "Internal Server Error"
+    # and the traceback goes to the server log, never to the client -- but it was
+    # the one response that did not match the shape `core/errors.py` promises,
+    # and it is the one a client is least equipped to guess at.
+    #
+    # **What this handler must never do is describe the exception.** `str(exc)`
+    # on a database error contains SQL and column names; on a filesystem error it
+    # contains a path; on an error raised while handling a login it could contain
+    # the submitted payload, which includes a password. So the message is a
+    # constant. The detail goes to the log, where an operator can read it and a
+    # caller cannot.
+    @app.exception_handler(Exception)
+    async def handle_unexpected_error(
+        request: Request, exc: Exception
+    ) -> JSONResponse:
+        logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": {
+                    "code": "internal_error",
+                    "message": "Something went wrong. Please try again.",
                 }
             },
         )

@@ -10,7 +10,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { ApiError, request } from "./client.ts";
+import { ApiError, apiBaseUrl, request } from "./client.ts";
 
 /** Replace global fetch for one test and restore it afterwards. */
 async function withFetch(
@@ -135,4 +135,49 @@ test("falls back to readable copy when the body is not an envelope", async () =>
       );
     },
   );
+});
+
+// --- where the API is, per environment (Phase 10) -------------------------
+//
+// The browser and the server resolve the API differently on purpose, and the
+// difference is the whole reason authentication works in a split deployment.
+// These pin both halves.
+
+test("in the browser the API base is relative, so calls are same-origin", () => {
+  const original = globalThis.window;
+  // A bare object is enough: `apiBaseUrl` only asks whether `window` is defined.
+  (globalThis as { window?: unknown }).window = {};
+  try {
+    assert.equal(apiBaseUrl(), "/api/v1");
+  } finally {
+    if (original === undefined) delete (globalThis as { window?: unknown }).window;
+    else (globalThis as { window?: unknown }).window = original;
+  }
+});
+
+test("on the server the API base is absolute", () => {
+  // No `window` here: this file runs under `node --test`.
+  assert.ok(apiBaseUrl().startsWith("http"));
+  assert.ok(apiBaseUrl().endsWith("/api/v1"));
+});
+
+test("the server base follows API_ORIGIN", () => {
+  const original = process.env.API_ORIGIN;
+  process.env.API_ORIGIN = "https://api.example.test";
+  try {
+    assert.equal(apiBaseUrl(), "https://api.example.test/api/v1");
+  } finally {
+    if (original === undefined) delete process.env.API_ORIGIN;
+    else process.env.API_ORIGIN = original;
+  }
+});
+
+test("the server base falls back to the local backend", () => {
+  const original = process.env.API_ORIGIN;
+  delete process.env.API_ORIGIN;
+  try {
+    assert.equal(apiBaseUrl(), "http://localhost:8000/api/v1");
+  } finally {
+    if (original !== undefined) process.env.API_ORIGIN = original;
+  }
 });

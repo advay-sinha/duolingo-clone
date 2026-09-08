@@ -54,6 +54,27 @@ from app.db.session import get_db
 from app.main import create_app
 
 
+@pytest.fixture(autouse=True)
+def _reset_login_limiter() -> Iterator[None]:
+    """Clear the failed-login counter around every test in the suite.
+
+    The limiter is deliberately module-level state — that is what lets it count
+    across requests — and `TestClient` always reports the same client host, so
+    every test shares one bucket. Without this, the sixth "wrong password" test
+    in the whole run would get a 429 where it expected a 401, and which test
+    broke would depend on collection order.
+
+    Autouse and in `conftest` rather than in `test_rate_limit.py`: the tests that
+    would be poisoned are in *other* files, and they should not have to know this
+    global exists.
+    """
+    from app.api.v1.routes.auth import login_limiter
+
+    login_limiter.clear()
+    yield
+    login_limiter.clear()
+
+
 @pytest.fixture
 def db_session(tmp_path) -> Iterator[Session]:
     """A seeded, isolated database session backed by a temporary file."""

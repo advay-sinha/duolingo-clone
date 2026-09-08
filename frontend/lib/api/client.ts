@@ -7,9 +7,40 @@
  * else.
  */
 
-/** Base URL of the FastAPI backend, e.g. "http://localhost:8000/api/v1". */
-export const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
+/**
+ * Where the API is, which depends on who is asking.
+ *
+ * **In the browser: a relative path.** Every client-side call goes to the app's
+ * own origin and is proxied to FastAPI by the rewrite in `next.config.ts`. That
+ * is what makes the session cookie first-party — see the long note there — and
+ * it means the API's real address is never inlined into the browser bundle.
+ *
+ * **On the server: an absolute origin.** Server Components run in Node, which has
+ * no notion of "the current origin", so they need the full address.
+ * `API_ORIGIN` is a plain (non-`NEXT_PUBLIC_`) variable read at request time, so
+ * changing it is a restart rather than a rebuild.
+ *
+ * **The Phase 10 audit found the previous version of this line to be a
+ * production footgun.** It was
+ * `process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1"`, and
+ * `NEXT_PUBLIC_*` is inlined at *build* time — so forgetting to set it in the
+ * deployment dashboard produced a bundle that asked every visitor's own machine
+ * for the API, with no error anywhere. That exact failure happened during Phase
+ * 9.5 verification and looked like an application bug for several minutes. The
+ * browser now needs no configuration at all, which is the only reliable way not
+ * to forget it.
+ */
+export function apiBaseUrl(): string {
+  if (typeof window !== "undefined") return "/api/v1";
+  const origin = process.env.API_ORIGIN ?? "http://localhost:8000";
+  return `${origin}/api/v1`;
+}
+
+// There is deliberately no exported `API_BASE_URL` constant any more. A
+// module-level constant would freeze whichever value `API_ORIGIN` held at import
+// time — the wrong lifetime for configuration — and, worse, it would be computed
+// on the server even for code that later runs in the browser. `apiBaseUrl()` is
+// called per request instead, which costs nothing and cannot be stale.
 
 /**
  * A failed API call. Carries the HTTP status so callers can branch on it
@@ -70,18 +101,19 @@ function fallbackMessage(status: number): string {
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
 
+  const base = apiBaseUrl();
+
   try {
-    response = await fetch(`${API_BASE_URL}${path}`, {
+    response = await fetch(`${base}${path}`, {
       ...init,
       headers: {
         "Content-Type": "application/json",
         ...init?.headers,
       },
-      // The session cookie is set by the API on a different port. Cookies are
-      // scoped by *domain*, not by port, so the browser holds one "localhost"
-      // cookie and this tells it to attach it to a cross-origin request. Without
-      // this, every browser call would arrive unauthenticated. The backend's
-      // CORS config already allows credentials from these exact origins.
+      // Since Phase 10 the browser calls its own origin, so cookies would be
+      // attached anyway — "same-origin" is the default. This is kept explicit
+      // because it is the behaviour the app depends on, and because it keeps a
+      // split-origin deployment working for anyone who chooses one.
       credentials: "include",
       // Progress data changes after every lesson, so nothing from this API is
       // safe to serve from a cache.
@@ -90,7 +122,7 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   } catch (cause) {
     // fetch only rejects on transport failure — backend down, DNS, CORS block.
     throw new ApiError(
-      `Could not reach the API at ${API_BASE_URL}. Is the backend running?`,
+      `Could not reach the API at ${base}. Is the backend running?`,
       0,
       { cause },
     );

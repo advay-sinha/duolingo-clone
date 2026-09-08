@@ -11,6 +11,8 @@ from fastapi import APIRouter, Request, Response
 
 from app.api.v1.deps import CurrentUser, DbSession
 from app.core.config import get_settings
+from app.core.errors import RateLimitedError
+from app.core.rate_limit import RateLimiter, login_key
 from app.schemas.auth import (
     AuthResponse,
     AuthenticatedUser,
@@ -21,6 +23,37 @@ from app.schemas.auth import (
 from app.services import auth_service
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+#: Failed-login counter, shared by every request in this process.
+#:
+#: Built once at import so its state survives between requests — which is the
+#: entire point, and also its limitation: the state lives in *this* process. See
+#: `app/core/rate_limit.py` for what that means for a multi-instance deployment.
+login_limiter = RateLimiter(
+    max_attempts=get_settings().login_max_attempts,
+    window_seconds=get_settings().login_window_seconds,
+)
+
+
+def client_ip(request: Request) -> str | None:
+    """Identify the caller's network address.
+
+    `X-Forwarded-For` is read **only** when `TRUST_PROXY_HEADERS` is on, and that
+    condition is load-bearing. The header is set by the client unless a proxy
+    overwrites it, so trusting it with nothing in front means an attacker sends a
+    different value on every request and the rate limit counts each one as a new
+    caller — a limiter that cannot limit. Behind a real proxy the opposite is
+    true: without it, every request appears to come from the proxy and one bucket
+    is shared by everybody.
+
+    The first entry is taken because a proxy chain appends, so the leftmost value
+    is the original client.
+    """
+    if get_settings().trust_proxy_headers:
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else None
 
 
 def _set_session_cookie(response: Response, token: str) -> None:
@@ -86,17 +119,54 @@ def register(
     "/login",
     response_model=AuthResponse,
     summary="Log in with email and password",
-    responses={401: {"description": "Email or password is incorrect"}},
+    responses={
+        401: {"description": "Email or password is incorrect"},
+        429: {"description": "Too many failed attempts; see the Retry-After header"},
+    },
 )
-def login(payload: LoginRequest, response: Response, db: DbSession) -> AuthResponse:
+def login(
+    payload: LoginRequest, request: Request, response: Response, db: DbSession
+) -> AuthResponse:
     """Verify credentials and start a session.
 
     Both failure modes — unknown email, wrong password — return the same 401 and
     the same message. See ``auth_service.login`` for why.
+
+    **Rate limiting lives here rather than in the service**, and that placement is
+    deliberate: how often a caller may try is a property of the transport, not of
+    the domain. `auth_service.login` still knows nothing about HTTP, IP addresses
+    or request counts, so it stays callable from a test or a CLI without any of
+    this being in the way.
+
+    **The check runs before the password is verified.** That is not an
+    optimisation — bcrypt at cost 12 takes roughly a quarter-second, so a login
+    endpoint that hashes before checking the limit is a way to spend the server's
+    CPU as fast as requests can be sent. Refusing first makes a blocked attempt
+    nearly free to reject.
+
+    Only *failures* count, and a success clears the key, so a learner who signs in
+    correctly is never limited.
     """
-    user, token = auth_service.login(
-        db, email=payload.email, password=payload.password
-    )
+    key = login_key(payload.email, client_ip(request))
+
+    if login_limiter.is_blocked(key):
+        error = RateLimitedError(
+            "Too many failed sign-in attempts. Please wait and try again."
+        )
+        error.headers = {"Retry-After": str(login_limiter.retry_after(key))}
+        raise error
+
+    try:
+        user, token = auth_service.login(
+            db, email=payload.email, password=payload.password
+        )
+    except auth_service.AuthenticationError:
+        login_limiter.register_failure(key)
+        # Re-raised unchanged: the response a caller sees below the limit is
+        # byte-for-byte what it was before Phase 10.
+        raise
+
+    login_limiter.reset(key)
     _set_session_cookie(response, token)
     return AuthResponse(user=AuthenticatedUser.model_validate(user))
 

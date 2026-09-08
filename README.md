@@ -3,16 +3,24 @@
 A gamified language-learning web app — Duolingo's learning path, lesson player and
 progression systems — built as a 24-hour full-stack assignment.
 
-**Current status: Phase 9.5 complete — the app is feature-complete for the
-assignment.** It is multi-user: learners register, log in and keep their own
-progress, and the leaderboard ranks real accounts. A new learner is now taken
-through onboarding — choose a course, say how much Spanish you know, and either
-start from scratch or take a **real adaptive placement test** built from the
-seeded course, which decides where on the path you begin. Learning path, lesson
-player, leaderboard and profile with achievements all work; hearts regenerate so
-a learner is never permanently stuck; match pairs is graded a pair at a time; and
-the app has pronunciation audio, dark mode, component tests and a completed
-accessibility, performance and security pass. See
+**Current status: Phase 10 complete — feature-complete, and prepared for
+deployment.** Phase 10 added Alembic migrations that adopt an existing database
+without losing a row, login rate limiting, environment profiles that refuse to
+boot an unsafe production config, and a same-origin deployment architecture that
+fixes a cookie problem which would have broken authentication on any split-host
+deploy. **The app has not been deployed** — see
+[Production architecture](#production-architecture) for what is verified and what
+is not.
+
+**The product**, unchanged since Phase 9.5: multi-user, with learners
+registering, logging in and keeping their own progress on a leaderboard of real
+accounts. A new learner goes through onboarding — choose a course, say how much
+Spanish you know, and either start from scratch or take a **real adaptive
+placement test** built from the seeded course, which decides where on the path
+they begin. Learning path, lesson player, leaderboard and profile with
+achievements all work; hearts regenerate so nobody is permanently stuck; match
+pairs is graded a pair at a time; and there is pronunciation audio, dark mode,
+component tests and a completed accessibility, performance and security pass. See
 [Current implementation status](#current-implementation-status).
 
 Existing accounts are unaffected: anyone who registered before onboarding existed
@@ -33,11 +41,13 @@ goes straight to `/learn`, exactly as before.
 | Frontend tests | Node's built-in runner (`node --test`) for pure logic; Vitest + jsdom + Testing Library for components | — / 3.x |
 | Database | SQLite (stdlib `sqlite3` driver) | — |
 | ORM | SQLAlchemy 2.0 (declarative, synchronous) | 2.0.52 |
+| Migrations | Alembic | 1.19.2 |
 | Password hashing | bcrypt | 5.0.0 |
 
-**Runtime dependencies, in full:** the frameworks above plus `bcrypt`. Sessions
-use `secrets` and `hashlib`, audio uses the browser's `SpeechSynthesis`, dark mode
-is CSS variables, and there is no state-management library on either side.
+**Runtime dependencies, in full:** the frameworks above plus `bcrypt` and
+`alembic`. Sessions use `secrets` and `hashlib`, rate limiting is a dictionary
+and a lock, audio uses the browser's `SpeechSynthesis`, dark mode is CSS
+variables, and there is no state-management library on either side.
 
 ---
 
@@ -49,15 +59,16 @@ duolingo/
 │   ├── app/
 │   │   ├── main.py               FastAPI factory: CORS, router mount, 3 error handlers
 │   │   ├── core/
-│   │   │   ├── config.py         typed settings from environment (incl. DATABASE_URL)
-│   │   │   └── errors.py         domain errors -> HTTP status, one response envelope
+│   │   │   ├── config.py         typed settings; production refuses to boot if unsafe
+│   │   │   ├── errors.py         domain errors -> HTTP status, one response envelope
+│   │   │   └── rate_limit.py     failed-login counter, injected clock, no dependencies
 │   │   ├── db/
 │   │   │   ├── base.py           DeclarativeBase
 │   │   │   ├── session.py        engine, SessionLocal, get_db, FK pragma
 │   │   │   ├── init_db.py        create_all
 │   │   │   ├── seed_data.py      the course content and achievements, as plain data
 │   │   │   ├── seed.py           idempotent, transactional seeding
-│   │   │   └── migrate.py        idempotent, non-destructive schema migrations
+│   │   │   └── migrate.py        adopts any database onto the Alembic timeline
 │   │   ├── models/
 │   │   │   ├── content.py        Course, Unit, Skill, Lesson, Exercise
 │   │   │   ├── user.py           User (email + password hash), UserStats, Session
@@ -92,7 +103,11 @@ duolingo/
 │   │       ├── deps.py           get_db, get_current_user
 │   │       └── routes/           health.py auth.py courses.py users.py lessons.py
 │   │                             leaderboard.py onboarding.py placement.py
-│   ├── tests/                    344 tests
+│   ├── alembic.ini               migration config (no database URL -- see env.py)
+│   ├── alembic/
+│   │   ├── env.py                one source of truth for which DB is migrated
+│   │   └── versions/0001_baseline.py   the Phase 9.5 schema, as a starting line
+│   ├── tests/                    401 tests
 │   │   ├── conftest.py               isolated test database via dependency override
 │   │   ├── test_health.py  test_database.py
 │   │   ├── test_api_courses.py  test_api_path.py  test_api_users.py
@@ -108,13 +123,17 @@ duolingo/
 │   │   ├── test_match_pairs.py       incremental grading and the heart rules
 │   │   ├── test_placement_engine.py  the algorithm, with no database at all
 │   │   ├── test_onboarding.py        the flow, persistence, and the bypass rule
-│   │   └── test_placement.py         the test, and everything it must not do
+│   │   ├── test_placement.py         the test, and everything it must not do
+│   │   ├── test_migrations.py        fresh, legacy, repeat; nothing is lost
+│   │   ├── test_rate_limit.py        a fake clock, so nothing sleeps
+│   │   └── test_config.py            production refuses to boot when unsafe
 │   ├── duolingo.db               SQLite file (gitignored, rebuilt by the seed)
 │   ├── requirements.txt
 │   ├── pytest.ini
 │   └── .env.example
 │
 ├── frontend/
+│   ├── next.config.ts            the /api/v1 rewrite -- makes the app same-origin
 │   ├── proxy.ts                  cookie-presence redirect (Next 16 convention)
 │   ├── app/
 │   │   ├── layout.tsx            root layout, Nunito Sans, pre-hydration theme script
@@ -150,7 +169,7 @@ duolingo/
 │   │       ├── types.ts          response types for every endpoint
 │   │       └── health.ts auth.ts courses.ts users.ts lessons.ts leaderboard.ts
 │   │           onboarding.ts placement.ts
-│   ├── *.test.ts                 126 pure-logic tests (node --test)
+│   ├── *.test.ts                 130 pure-logic tests (node --test)
 │   ├── **/*.test.tsx             97 component tests (vitest + jsdom)
 │   ├── vitest.config.ts  vitest.setup.ts
 │   └── .env.example
@@ -1168,6 +1187,376 @@ fixed, and rather than hidden.
 
 ---
 
+## Production architecture
+
+**Status: configuration is complete and locally verified. It has NOT been
+deployed.** No hosting account was used, and every claim below about a live
+deployment is labelled accordingly. What *has* been verified is the topology —
+the same-origin rewrite, the cookie, the migration and the rate limiter all
+tested against a production build talking to a real backend on this machine.
+
+```
+                    ┌──────────────────────────────────────────┐
+   Browser ────────►│  Next.js  (Vercel)                       │
+                    │                                          │
+   /learn           │   Server Components ──────────┐          │
+   /login           │                               │          │
+   /api/v1/*  ──────┼──► rewrite ───────────────────┼────────► │──► FastAPI
+                    │   (next.config.ts)            │          │    + SQLite
+                    └───────────────────────────────┴──────────┘    on a
+                          one origin, seen by the browser           persistent
+                                                                    volume
+```
+
+**Everything the browser touches is one origin.** `/api/v1/*` is rewritten by
+Next.js to the backend. Server Components skip the hop and call `API_ORIGIN`
+directly.
+
+### Why the rewrite exists — the finding that shaped this phase
+
+The session cookie is `SameSite=Lax`. Had the browser called the API directly at
+a different host — `app.vercel.app` calling `api.example.dev` — those are
+different *sites*, so the browser would have refused **both** to store the
+`Set-Cookie` from login and to send the cookie on later requests. Server-rendered
+pages would have kept working, because they forward the cookie over
+server-to-server HTTP where SameSite does not apply.
+
+The result would have been a deployment where `/learn` renders and login,
+logout, onboarding, placement and every answer submission silently fail. It works
+locally today only because `localhost:3000` and `localhost:8000` are the same
+site — cookies ignore ports — so the split-origin path had never actually been
+exercised.
+
+The rewrite dissolves the problem rather than working around it:
+
+| | Split origin | Same origin (chosen) |
+|---|---|---|
+| Session cookie | blocked by `SameSite=Lax` | first-party, works |
+| CSRF defence | needs `SameSite=None` + a CSRF token | `SameSite=Lax` keeps its full value |
+| CORS | an allowlist that must stay correct | **no cross-origin request exists** |
+| API address in the browser bundle | required | not present |
+| Dev vs prod | different paths | the same path |
+
+### Deployment options considered
+
+| | Option | Verdict |
+|---|---|---|
+| **A** | Next.js *and* FastAPI both on Vercel | **Rejected.** Vercel functions have an ephemeral, per-instance filesystem — only `/tmp`, not shared, discarded between invocations. SQLite there loses every write and different instances see different databases. The assignment specifies SQLite, so the honest conclusion is that FastAPI cannot be a Vercel function in this project. |
+| **B** | Next.js on Vercel + FastAPI on a host with a persistent disk | **Chosen.** Keeps Vercel's CDN and preview deployments, keeps SQLite exactly as specified, and the rewrite makes it same-origin. Fly.io, Railway and Render all offer a mountable volume on a free or cheap tier. |
+| **C** | Both on one persistent host | **A legitimate alternative**, and simpler in some ways: one origin natively, no rewrite, one process manager. It gives up the CDN and preview deployments, which is most of what putting Next.js on Vercel buys. |
+
+**Postgres was deliberately not introduced.** It would be more "production-like"
+and it would solve nothing this project has: the assignment specifies SQLite, and
+Option B gives SQLite a durable home. Swapping it in later is one `DATABASE_URL`
+and no code change — which is itself the argument that it does not need doing
+now.
+
+---
+
+## Environment variables
+
+**No secret is required to run this application.** There is no `SESSION_SECRET`,
+because session tokens are 32 random bytes stored as a SHA-256 digest and looked
+up — not signed and verified — so there is no key to manage, rotate or leak.
+
+### Backend
+
+| Variable | Default | Notes |
+|---|---|---|
+| `ENVIRONMENT` | `development` | `development` / `test` / `production`. Production turns on the startup checks below. |
+| `DATABASE_URL` | absolute path to `backend/duolingo.db` | In production, a file on a persistent volume: `sqlite:////data/duolingo.db` (four slashes — three for the scheme, one for the absolute path). |
+| `SESSION_COOKIE_SECURE` | `false` | **Required true in production.** |
+| `SESSION_COOKIE_NAME` | `duolingo_session` | Must match the frontend's. |
+| `SESSION_LIFETIME_DAYS` | `14` | |
+| `BCRYPT_ROUNDS` | `12` | The test suite uses 4. |
+| `LOGIN_MAX_ATTEMPTS` | `5` | Failed logins per (email, IP) per window. |
+| `LOGIN_WINDOW_SECONDS` | `300` | |
+| `TRUST_PROXY_HEADERS` | `false` | **Set true in production**, where a platform proxy overwrites `X-Forwarded-For`. See the warning below. |
+| `CORS_ORIGINS` | localhost pair | **Set to `[]` in production** — the rewrite means no cross-origin request exists. |
+| `DEMO_USER_PASSWORD` | `duolingo123` | **Production refuses to start while this is the committed default.** |
+| `DATABASE_ECHO` | `false` | Refused in production: it logs SQL parameters. |
+
+### Frontend
+
+| Variable | Default | Notes |
+|---|---|---|
+| `API_ORIGIN` | `http://localhost:8000` | Where the backend is, **as seen from the Next.js server**. Not `NEXT_PUBLIC_`, so it is never inlined into the browser bundle and changing it is a restart rather than a rebuild. |
+| `SESSION_COOKIE_NAME` | `duolingo_session` | Must match the backend's. |
+
+`NEXT_PUBLIC_API_URL` **was removed in Phase 10.** It was inlined at build time,
+so forgetting to set it produced a deployed bundle that asked every visitor's own
+machine for the API — with no error anywhere. That failure actually happened
+during Phase 9.5 verification and looked like an application bug for several
+minutes. The browser now needs no configuration at all, which is the only
+reliable way not to forget it.
+
+> ⚠️ **`TRUST_PROXY_HEADERS` is a security setting, not a convenience one.**
+> `X-Forwarded-For` is attacker-controlled unless a proxy overwrites it. Turned on
+> with nothing in front, a caller sends a fresh value per request and the rate
+> limiter counts each as a new client — a limiter that cannot limit. Turned *off*
+> behind a proxy, every request appears to come from the proxy and all learners
+> share one bucket. It must match the deployment.
+
+### Configuration refuses to boot when it is unsafe
+
+`ENVIRONMENT=production` validates itself at startup and **crashes with a list**
+rather than running:
+
+```
+Unsafe production configuration:
+  - SESSION_COOKIE_SECURE must be true in production, or the session cookie is
+    sent over plain http and anyone on the network can read it.
+  - DEMO_USER_PASSWORD is still the committed default, which is published in
+    this repository.
+  - CORS_ORIGINS still contains localhost.
+```
+
+Every one of those is a mistake that is otherwise **silent** — the app looks
+healthy while being wrong. A deployment that fails visibly gets fixed in minutes;
+one that succeeds insecurely can run for months. All problems are reported at
+once, so fixing them is one deploy rather than four.
+
+---
+
+## Database migrations
+
+Alembic, since Phase 10.
+
+```bash
+cd backend
+.venv/Scripts/python.exe -m app.db.migrate     # the only command you need
+```
+
+It handles three cases and picks the right one by itself:
+
+| Your database | What happens |
+|---|---|
+| **Empty** (fresh clone) | `alembic upgrade head` builds all 17 tables |
+| **Existing, no Alembic history** (anything from before Phase 10) | repaired to the current shape if needed, verified against the models, then **stamped** — the version is recorded and **no DDL runs** |
+| **Already managed** | `alembic upgrade head` |
+
+**Stamping is the whole trick of adopting a migration tool against data that
+already exists.** You tell Alembic where you are rather than asking it to build
+what is already there. Verified against a copy of a real development database:
+7 users, 5 attempts, 20 answers, 63 progress rows, 6 achievements and 12 sessions
+all preserved, password hashes untouched, sessions still valid.
+
+**It never drops, rewrites or deletes a row, and running it twice is a no-op.**
+
+### Creating a fresh database
+
+```bash
+cd backend
+rm -f duolingo.db                              # optional: start clean
+.venv/Scripts/python.exe -m app.db.migrate     # create the schema
+.venv/Scripts/python.exe -m app.db.seed        # add the course + demo learner
+```
+
+### Making a schema change from now on
+
+```bash
+cd backend
+.venv/Scripts/alembic.exe revision --autogenerate -m "what changed"
+# review the generated file — autogenerate is a first draft, not an oracle
+.venv/Scripts/alembic.exe upgrade head
+.venv/Scripts/alembic.exe downgrade -1         # and check it reverses
+```
+
+Two details worth knowing. `env.py` sets `render_as_batch=True`, without which
+**SQLite cannot migrate anything beyond "add a column"** — it has no `DROP
+COLUMN`, no type change and no constraint change, so Alembic rebuilds the table
+and copies the rows instead. And the database URL is read from the application's
+own settings, never from `alembic.ini`, so it is impossible to migrate one
+database while the app opens another.
+
+---
+
+## Production security
+
+| Area | Status |
+|---|---|
+| Password storage | bcrypt, cost 12, self-salting. Never logged, never serialised — no response model declares the field |
+| Sessions | Opaque 32-byte token in an `HttpOnly` cookie; SHA-256 in the database. Logout deletes the row |
+| Cookie | `HttpOnly` + `SameSite=Lax` + `Secure` (enforced in production) + `Path=/` |
+| CSRF | `SameSite=Lax` on a same-origin deployment. See the honest caveat below |
+| CORS | Not needed in the chosen topology; the allowlist may be empty. **Never `*`** — a wildcard origin and credentialed requests are incompatible by specification |
+| Rate limiting | Failed logins, per (email, IP) — see below |
+| Identity | Always from the session cookie. **No endpoint accepts a user id**, so cross-user access is not a check that can be forgotten |
+| SQL injection | No string interpolation into SQL anywhere; every query is SQLAlchemy |
+| Answer leakage | `ExercisePublic` declares no answer field, and option order is decoupled from the authored order (Phase 8) |
+| Error responses | One envelope for everything, including 500s. No stack traces, SQL, paths or payloads reach a client |
+
+**On CSRF, honestly.** `SameSite=Lax` stops the cross-site POST a classic CSRF
+attack needs, and on a same-origin deployment that is a real defence rather than
+a fig leaf. It is *not* the same as a full CSRF strategy: it relies on browser
+behaviour rather than on the server proving the request came from its own page,
+it does nothing against an attacker who can already run script on the origin, and
+a same-site subdomain would be trusted. A synchroniser token would close those.
+It is not implemented, and this is a scope decision rather than an oversight.
+
+---
+
+## Rate limiting
+
+Five failed logins per `(email, client IP)` per five minutes. The sixth gets
+**429 with a `Retry-After` header**.
+
+```
+attempt 1-5  ->  401  {"error":{"code":"unauthenticated", ...}}
+attempt 6+   ->  429  {"error":{"code":"rate_limited", ...}}   Retry-After: 298
+```
+
+Four properties, each deliberate:
+
+- **The response below the limit is byte-for-byte what it was before.** A
+  learner who mistypes their password sees exactly the same thing they always did.
+- **Being blocked reveals nothing about whether an email exists.** The limiter
+  never consults the users table, so a registered address and an unknown one are
+  blocked after the same number of attempts with the same response.
+- **Only failures count, and a success clears the key.** Signing in correctly
+  forty times is a person with a flaky connection, not an attacker.
+- **The check runs before bcrypt.** Hashing costs ~250 ms, so a login endpoint
+  that hashes before checking the limit is a cheap way to spend the server's CPU.
+
+**Why `email + IP` and not either alone:** email only would let anyone lock a
+known learner out of their own account — the limiter becomes the attack. IP only
+would make one office or one mobile carrier share a single budget.
+
+> ⚠️ **KNOWN LIMITATION — this is in-process memory.** Counters are lost on
+> restart, and on a multi-instance or serverless deployment each instance counts
+> separately, so N instances multiply the effective limit by N. On the single
+> persistent container this project targets, that is exactly one instance and the
+> limit is the limit. Behind an autoscaler the honest fix is the platform's own
+> rate limiting or a shared store — and this module should then be deleted rather
+> than patched. Redis was ruled out deliberately: a network hop and an operational
+> dependency to count to five is not a trade worth making here.
+
+**And it is a mitigation, not an identity-security system.** It raises the cost
+of guessing. It is not a substitute for a breached-password check,
+multi-factor authentication, anomaly detection or an account-lockout flow with a
+way back in — all of which remain out of scope.
+
+One consequence worth stating: while blocked, **even the correct password gets a
+429**. That is intentional — otherwise an attacker who guesses right on attempt
+six is let in, which is the case the limit exists for.
+
+---
+
+## Deployment steps
+
+**NOT VERIFIED — no deployment was performed.** These follow from the
+configuration, which was tested locally against a production build.
+
+### 1. Backend, on a host with a persistent volume
+
+```bash
+# Mount a volume at /data, then set:
+ENVIRONMENT=production
+DATABASE_URL=sqlite:////data/duolingo.db
+SESSION_COOKIE_SECURE=true
+TRUST_PROXY_HEADERS=true
+CORS_ORIGINS=[]
+DEMO_USER_PASSWORD=<something only you know>
+
+# On each release, before the new version serves traffic:
+python -m app.db.migrate
+python -m app.db.seed       # idempotent; safe to run every time
+
+# Serve:
+uvicorn app.main:app --host 0.0.0.0 --port $PORT
+```
+
+### 2. Frontend, on Vercel
+
+Set one environment variable — `API_ORIGIN` — to the backend's public URL, and
+deploy. **No `vercel.json` is needed and none was added:** the rewrite lives in
+`next.config.ts`, which Vercel reads natively. Adding a deployment file that does
+nothing would be configuration theatre.
+
+### 3. Check
+
+```bash
+curl https://<frontend>/api/v1/health     # proves the rewrite reaches the API
+```
+
+---
+
+## Production smoke test
+
+**NOT VERIFIED against a deployment.** Every step below *was* run against a
+production build on this machine, through the rewrite, and passed — that is what
+is being claimed, and no more.
+
+| # | Step | Expected | Local result |
+|---|---|---|---|
+| 1 | Open `/register`, create an account | Lands on `/onboarding/course` | ✅ 201 |
+| 2 | Choose Spanish | `/onboarding/proficiency` | ✅ step advanced |
+| 3 | Choose a proficiency | `/onboarding/start` | ✅ |
+| 4 | "Start from scratch" | `/learn`, onboarding complete | ✅ `DONE` |
+| 5 | Open a lesson, answer correctly | +10 XP, hearts unchanged | ✅ 5 hearts, 10 XP |
+| 6 | Answer incorrectly | One heart lost | ✅ 5 → 4 |
+| 7 | Match pairs: submit a wrong pair | One heart, graded per pair | ✅ 4 → 3 |
+| 8 | Complete the lesson | XP, streak, achievement | ✅ 40 XP, streak 1, "First steps" |
+| 9 | Complete it again | Refused | ✅ 409 |
+| 10 | Leaderboard | New learner appears, **no email in the payload** | ✅ rank 4, no emails |
+| 11 | Profile | Own data | ✅ |
+| 12 | Log out | Session row deleted | ✅ `{"ended":true}` |
+| 13 | Open `/learn` signed out | Redirect to `/login` | ✅ 307 |
+| 14 | Log in again | Progress intact | ✅ 40 XP, streak 1, onboarding still complete |
+| 15 | Fail login six times | 429 + `Retry-After` | ✅ |
+| 16 | Placement test | Real questions, no XP/heart fields | ✅ level 3 start, none present |
+
+**Not verified, and not claimed:** dark mode, pronunciation audio, mobile layout,
+and anything that requires *looking* at the app. Browser tooling has been
+unavailable since Phase 8. See [Responsive status](#responsive-status).
+
+---
+
+## Rollback strategy
+
+| Situation | Action |
+|---|---|
+| **Frontend is bad** | Vercel: promote the previous deployment. Instant, and no database involvement — the frontend holds no state |
+| **Backend code is bad, schema unchanged** | Redeploy the previous image. Nothing else to undo |
+| **A migration is bad** | `alembic downgrade -1`, then redeploy the previous image. Every revision must have a working `downgrade()`, and `test_every_revision_has_a_downgrade` fails the build if one is left empty |
+| **Data is damaged** | Restore the volume snapshot. **This is the only path that loses data**, back to the snapshot's timestamp |
+
+**Order matters on the way back.** Roll the *code* back before the schema if the
+old code cannot read the new schema; roll the *schema* back first if the new code
+cannot read the old one. The safe way to avoid the question is to make migrations
+additive — add a column, deploy code that writes it, and only remove the old one
+a release later. That is what a `downgrade()` is really for.
+
+**Backups.** Whatever the host offers for volume snapshots, plus the fact that
+SQLite is one file: `sqlite3 /data/duolingo.db ".backup /data/backup.db"` is a
+complete, consistent copy taken while the app is running. That is a genuine
+advantage of SQLite here, not a consolation.
+
+---
+
+## Known production limitations
+
+- **Not deployed.** Configuration is complete and locally verified; no hosting
+  account was used. Nothing here claims otherwise.
+- **SQLite is single-writer.** One write at a time, serialised by a lock. Fine
+  for this workload — writes are short and infrequent — and it is a hard ceiling
+  that no amount of tuning removes. Postgres is one `DATABASE_URL` away when it
+  is genuinely needed.
+- **The backend cannot scale horizontally.** SQLite on a volume means one
+  instance. The rate limiter's in-memory state has the same constraint, and they
+  are the same constraint.
+- **Rate limiting is per process** — see the warning above.
+- **No CSRF token**, only `SameSite=Lax`.
+- **No password reset, email verification, account deletion, roles or audit
+  log.** Deliberate scope decisions since Phase 9, unchanged.
+- **No live browser QA** since Phase 8.
+- **`/learn`'s onboarding redirect is a `<meta refresh>`, not a 307**, because
+  that route streams a loading skeleton before the guard runs.
+- **The seeded demo learner exists in any database you seed.** In production,
+  either set `DEMO_USER_PASSWORD` or do not run the seed.
+
+---
+
 ## Responsive status
 
 **Verified structurally. Not verified visually at a phone viewport.**
@@ -1201,9 +1590,9 @@ not happen — is worse than the gap itself.
 ## Tests
 
 ```bash
-cd backend  && .venv/Scripts/python.exe -m pytest       # 344 tests
-cd frontend && npm test                                 # 126 pure-logic + 97 component tests
-cd frontend && npm run test:unit                        # 126 pure-logic only (node --test)
+cd backend  && .venv/Scripts/python.exe -m pytest       # 401 tests
+cd frontend && npm test                                 # 130 pure-logic + 97 component tests
+cd frontend && npm run test:unit                        # 130 pure-logic only (node --test)
 cd frontend && npm run test:components                  # 97 component only (vitest)
 cd frontend && npx tsc --noEmit && npm run lint          # types + lint
 cd frontend && npm run build                             # production build
@@ -1243,6 +1632,29 @@ other four structural rather than incidental.
 ---
 
 ## Current implementation status
+
+**Implemented (Phase 10)**
+
+- Alembic, with a baseline that **adopts an existing database by stamping it** —
+  no DDL, no data loss, verified against a copy of a real development database
+- `python -m app.db.migrate` handles empty / legacy / managed databases and is a
+  no-op on the second run
+- 15 migration tests, including one that asserts the migrated schema is
+  *semantically identical* to `create_all` from the models
+- Login rate limiting: 5 failed attempts per (email, IP) per 5 minutes, 429 with
+  `Retry-After`, checked before bcrypt, cleared by a successful login
+- 28 rate-limit tests with an injected clock — **nothing sleeps**
+- Environment profiles, with production **refusing to boot** on an insecure
+  cookie, the committed demo password, SQL echo, or a localhost CORS entry
+- A same-origin `/api/v1` rewrite, which is what makes the session cookie work in
+  a split-host deployment at all
+- `NEXT_PUBLIC_API_URL` removed — the browser needs no configuration, so it
+  cannot be forgotten
+- The error envelope now covers 500s too; no stack trace, SQL, path or payload
+  reaches a client
+- Cookie name read from one environment variable on both sides
+- One dependency added (`alembic`); `docs/` un-ignored so the learning document
+  is actually in the repository
 
 **Implemented (Phase 9.5)**
 
@@ -1454,12 +1866,15 @@ above.)*
 | 7 | Leaderboard, profile, achievements, heart regeneration |
 | 8 | Audio, dark mode, component tests, accessibility / performance / security pass |
 | 9 | Local authentication, multi-user isolation, incremental match pairs |
-| **9.5** | **New-user onboarding and an adaptive placement test** ← current |
+| 9.5 | New-user onboarding and an adaptive placement test |
+| **10** | **Production readiness: Alembic, rate limiting, deployment architecture** ← current |
 
 Not scheduled: multiple *real* courses (the picker labels the rest "coming soon"
-rather than faking them), the shop, legendary mode, weekly leaderboard periods, a
-migration framework, and the production-identity features Phase 9 deliberately
-left out (password reset, email verification, rate limiting, roles).
+rather than faking them), the shop, legendary mode, weekly leaderboard periods,
+and the production-identity features Phase 9 deliberately left out (password
+reset, email verification, roles, audit log). **The actual deployment** is the
+obvious next step: the configuration is done and locally verified, but nothing
+has been pushed to a host.
 
 Full architecture, schema and API design: **`docs/PHASE_0_AUDIT.md`**.
 File-by-file explanations: **`docs/CODEBASE_LEARNING.md`**.

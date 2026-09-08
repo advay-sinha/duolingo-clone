@@ -27,6 +27,17 @@ Thumbs.db
 
 prompt.txt
 CLAUDE.md
-docs/
-stitch/
 AGENTS.md
+
+# `docs/` is deliberately NOT ignored. `docs/CODEBASE_LEARNING.md` is the
+# project's master explanation -- architecture, ADRs, request flows, a
+# file-by-file guide and the learning checkpoints -- and a clone without it is
+# missing the document that explains everything else. It was ignored by
+# accident; the Phase 10 audit caught it.
+
+# `stitch/` stays ignored: it is ~30 MB of read-only reference designs (PNGs and
+# generated HTML) that nothing in the build imports. The values taken from it --
+# the colour tokens, the type scale -- live in `frontend/app/globals.css`, and
+# the mascot is redrawn as inline SVG rather than shipped as a 760 KB PNG.
+stitch/
+docs/
