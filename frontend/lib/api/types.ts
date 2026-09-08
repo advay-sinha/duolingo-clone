@@ -44,9 +44,22 @@ export interface CourseListResponse {
  *
  * Computed by the backend's `PathService`, never stored. The Stitch design also
  * shows an "in progress" node; that is a rendering distinction the UI derives
- * from `lessons_completed > 0` on an `AVAILABLE` skill, not a fourth state.
+ * from `lessons_completed > 0` on an `AVAILABLE` skill, and deliberately not a
+ * domain state. `PLACED_OUT` *is* one, because it says something about the
+ * learner's history that no other field does.
  */
-export type SkillState = "LOCKED" | "AVAILABLE" | "COMPLETED";
+export type SkillState =
+  | "LOCKED"
+  | "AVAILABLE"
+  | "COMPLETED"
+  | /**
+     * A placement test placed the learner beyond this skill (Phase 9.5).
+     *
+     * Kept distinct from `COMPLETED` all the way to the UI, because it is a
+     * different fact: the learner never did these lessons. It unlocks what
+     * follows exactly as a crown does, and the skill stays playable.
+     */
+    "PLACED_OUT";
 
 export interface LessonNode {
   id: number;
@@ -65,6 +78,8 @@ export interface SkillNode {
   icon: string;
   state: SkillState;
   crowns: number;
+  /** True when a placement test placed the learner beyond this skill. */
+  placed_out: boolean;
   lessons_completed: number;
   total_lessons: number;
   xp_earned: number;
@@ -353,4 +368,116 @@ export interface SubmitPairResponse {
   already_answered: boolean;
   answered_count: number;
   total_exercises: number;
+}
+
+// --- onboarding -----------------------------------------------------------
+
+/**
+ * The five proficiency answers, as a controlled union.
+ *
+ * The same five values the backend's `ProficiencyLevel` enum declares. A union
+ * rather than `string`, so a typo is a compile error here and a 422 there — the
+ * label a learner reads is copy and will change; this value must not.
+ */
+export type ProficiencyLevel =
+  | "BEGINNER"
+  | "COMMON_WORDS"
+  | "BASIC_CONVERSATION"
+  | "VARIOUS_TOPICS"
+  | "ADVANCED";
+
+/** Which of the two starting-point cards the learner chose. */
+export type StartingMode = "SCRATCH" | "PLACEMENT";
+
+/**
+ * The onboarding step the learner is on.
+ *
+ * **Computed by the server**, from which of its columns are still null. The
+ * frontend routes on this value and never works the sequence out for itself,
+ * which is what makes onboarding resume correctly after a refresh, a logout, or
+ * a login on a different device.
+ */
+export type OnboardingStep =
+  | "COURSE"
+  | "PROFICIENCY"
+  | "START"
+  | "PLACEMENT"
+  | "DONE";
+
+/** The stored outcome of a placement test. */
+export interface PlacementSummary {
+  level: number;
+  score: number;
+  max_score: number;
+  skill_id: number | null;
+  skill_title: string | null;
+  unit_title: string | null;
+  skills_placed_out: number;
+}
+
+/** `GET /onboarding`, and the response of every onboarding write. */
+export interface OnboardingStatus {
+  completed: boolean;
+  step: OnboardingStep;
+  course_id: number | null;
+  proficiency: ProficiencyLevel | null;
+  starting_mode: StartingMode | null;
+  placement: PlacementSummary | null;
+  /** True for a learner who registered before onboarding existed. */
+  grandfathered: boolean;
+  completed_at: string | null;
+}
+
+// --- placement ------------------------------------------------------------
+
+/** One placement question, with where it sits in the test. */
+export interface PlacementQuestion {
+  exercise: ExercisePublic;
+  /** The difficulty band it was drawn from, 1-5. */
+  difficulty: number;
+  /** 1-based, for "Question 3 of 8". */
+  number: number;
+}
+
+/** `POST /placement/start` — the open test and the question to show now. */
+export interface PlacementState {
+  test_id: number;
+  total_questions: number;
+  answered_count: number;
+  finished: boolean;
+  question: PlacementQuestion | null;
+}
+
+/**
+ * `POST /placement/answer`.
+ *
+ * A superset of `PlacementState`, deliberately: the verdict fields are added to
+ * the same shape, so one render function handles both and the client never
+ * merges a response into state it was already holding.
+ */
+export interface PlacementAnswerResult extends PlacementState {
+  correct: boolean;
+  /** Populated only after an incorrect answer, for feedback. */
+  correct_answer: string | null;
+  already_answered: boolean;
+}
+
+/**
+ * `POST /placement/complete`.
+ *
+ * Note what is absent and always will be: xp, hearts, streak, crowns. A
+ * placement response has no field a reward could travel in.
+ */
+export interface PlacementResult {
+  test_id: number;
+  level: number;
+  score: number;
+  max_score: number;
+  total_questions: number;
+  correct_answers: number;
+  skill_id: number;
+  skill_title: string;
+  unit_title: string;
+  skills_placed_out: number;
+  onboarding: OnboardingStatus;
 }

@@ -14,9 +14,13 @@
  * coordination lives in `LessonPlayer`.
  */
 
-import type { SubmitAnswerResponse, SubmitPairResponse } from "@/lib/api/types";
+import type { SubmitPairResponse } from "@/lib/api/types";
 import { assertNever } from "@/lib/lesson/exercise";
-import type { DraftAnswer, NarrowedExercise } from "@/lib/lesson/exercise";
+import type {
+  DraftAnswer,
+  ExerciseVerdict,
+  NarrowedExercise,
+} from "@/lib/lesson/exercise";
 
 import { FillBlankExercise } from "./exercises/FillBlankExercise";
 import { MatchPairsExercise } from "./exercises/MatchPairsExercise";
@@ -28,8 +32,14 @@ import { TypeAnswerExercise } from "./exercises/TypeAnswerExercise";
 export interface ExerciseComponentProps {
   /** True once submitted — inputs lock so a graded answer cannot be edited. */
   disabled: boolean;
-  /** The server's verdict, or null before submission. Drives result colours. */
-  verdict: SubmitAnswerResponse | null;
+  /**
+   * The server's verdict, or null before submission. Drives result colours.
+   *
+   * Deliberately narrow: only `correct` is needed, which is what lets the
+   * placement test reuse these renderers without inventing XP and heart fields
+   * an assessment does not have.
+   */
+  verdict: ExerciseVerdict | null;
   /** Report the answer so far, or null when there is not enough to submit. */
   onDraftChange: (draft: DraftAnswer) => void;
   /** Request submission (used by Enter-to-submit in text exercises). */

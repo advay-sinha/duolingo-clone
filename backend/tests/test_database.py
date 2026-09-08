@@ -83,7 +83,9 @@ def test_all_expected_tables_are_created(db: Session) -> None:
     """Pins the schema. Adding a table is a deliberate act, so this test is
     meant to fail until it is updated — as it did when Phase 4 introduced
     ``lesson_attempt_answers``, when Phase 7 added the achievement tables, and
-    again in Phase 9 for ``sessions`` and ``lesson_attempt_pairs``."""
+    again in Phase 9 for ``sessions`` and ``lesson_attempt_pairs``, and in
+    Phase 9.5 for ``user_onboarding``, ``placement_tests`` and
+    ``placement_answers``."""
     names = set(Base.metadata.tables)
     assert names == {
         "achievements",
@@ -100,6 +102,9 @@ def test_all_expected_tables_are_created(db: Session) -> None:
         "lesson_attempt_answers",
         "lesson_attempt_pairs",
         "sessions",
+        "user_onboarding",
+        "placement_tests",
+        "placement_answers",
     }
 
 

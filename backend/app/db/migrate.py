@@ -1,11 +1,21 @@
-"""One hand-written migration, for the Phase 9 authentication columns.
+"""Hand-written migrations, for the schema changes ``create_all`` cannot make.
 
 **Why this file exists at all.** Every earlier phase created its tables with
 ``create_all``, which is honest about what it does: it creates tables that are
 missing and never alters a table that exists. That was fine while every schema
 change added a *new* table. Phase 9 adds columns to ``users``, so ``create_all``
 would silently do nothing and the application would fail at runtime against an
-old database.
+old database. Phase 9.5 adds one column to ``user_skill_progress`` for the same
+reason, and two whole tables that ``create_all`` handles by itself.
+
+**What Phase 9.5 deliberately does *not* migrate: existing learners.** It would
+have been natural to backfill a completed ``user_onboarding`` row for everyone
+who already has an account. It is not done, because the absence of a row already
+means the right thing — rows are only ever created by registration, and only from
+Phase 9.5 onward, so "no row" is a true statement that this learner predates
+onboarding. Backfilling would invent a course choice and a proficiency they never
+made, and would make correct behaviour depend on someone remembering to run this
+script. See ADR-64.
 
 **Why not Alembic.** Alembic is the right answer for a schema that keeps moving,
 and it is what this project would adopt next. It is not the right answer for one
@@ -42,12 +52,28 @@ def _columns(connection, table: str) -> set[str]:
 
 
 def migrate() -> None:
-    """Bring an existing database up to the Phase 9 schema."""
+    """Bring an existing database up to the current schema."""
     settings = get_settings()
 
-    # New *tables* (sessions, lesson_attempt_pairs) need nothing special —
+    # New *tables* (sessions, lesson_attempt_pairs in Phase 9; user_onboarding,
+    # placement_tests and placement_answers in Phase 9.5) need nothing special —
     # create_all still does exactly the right thing for those.
     create_tables()
+
+    # --- Phase 9.5: user_skill_progress.placed_out_at ---------------------
+    # Nullable, so unlike the Phase 9 credential columns there is no default to
+    # supply and no backfill to do. Null is already the correct value for every
+    # existing row: nobody has been placed out of anything.
+    with engine.begin() as connection:
+        if "user_skill_progress" in inspect(engine).get_table_names():
+            if "placed_out_at" not in _columns(connection, "user_skill_progress"):
+                connection.execute(
+                    text(
+                        "ALTER TABLE user_skill_progress "
+                        "ADD COLUMN placed_out_at DATETIME"
+                    )
+                )
+                print("user_skill_progress: added placed_out_at")
 
     inspector = inspect(engine)
     if "users" not in inspector.get_table_names():

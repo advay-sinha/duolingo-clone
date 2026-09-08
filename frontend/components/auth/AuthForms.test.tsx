@@ -158,7 +158,8 @@ describe("RegisterForm", () => {
       password: "password123",
       display_name: "Alice",
     });
-    expect(push).toHaveBeenCalledWith("/learn");
+    // Phase 9.5: a new account goes to onboarding, not straight to the path.
+    expect(push).toHaveBeenCalledWith("/onboarding/course");
   });
 
   test("mismatched passwords are caught before any request", async () => {

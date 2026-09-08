@@ -80,7 +80,11 @@ export function RegisterForm() {
         display_name: displayName.trim(),
       });
       router.refresh();
-      router.push("/learn");
+      // Phase 9.5: a new account always starts onboarding. Sending them to
+      // `/learn` would work — its guard would bounce them here — but it would
+      // cost a round trip and a flash of the wrong screen. The guard remains the
+      // authority; this is just the shortcut to the right first screen.
+      router.push("/onboarding/course");
     } catch (cause) {
       if (cause instanceof ApiError && (cause.status === 409 || cause.status === 422)) {
         const message = cause.message;

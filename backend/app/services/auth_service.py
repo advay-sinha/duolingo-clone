@@ -36,7 +36,7 @@ from app.core.config import get_settings
 from app.core.errors import ConflictError, DomainError
 from app.models import Session, User, UserStats, UserSkillProgress
 from app.models.content import Skill
-from app.repositories import user_repo
+from app.repositories import onboarding_repo, user_repo
 from app.services.gamification import as_utc
 
 # --------------------------------------------------------------------------
@@ -260,6 +260,10 @@ def initialize_learner(db: DbSession, user: User) -> None:
     the existing ``path_service`` rule makes the first skill AVAILABLE and the
     rest LOCKED, with no special case for "new user".
 
+    Since Phase 9.5 it also opens an onboarding row, so the learner is asked
+    which course, how much they know, and where to start before they reach the
+    path.
+
     Does not commit: the caller owns the transaction.
     """
     settings = get_settings()
@@ -277,6 +281,12 @@ def initialize_learner(db: DbSession, user: User) -> None:
     )
     for skill_id in db.scalars(select(Skill.id).order_by(Skill.id)).all():
         db.add(UserSkillProgress(user_id=user.id, skill_id=skill_id))
+
+    # Phase 9.5: every new learner starts onboarding. The row is written in the
+    # same transaction as the user, which is what makes "no onboarding row" mean
+    # exactly one thing -- this learner registered before onboarding existed --
+    # and therefore what lets existing learners bypass it safely.
+    onboarding_repo.create(db, user.id)
 
 
 def register(

@@ -84,6 +84,15 @@ class User(Base):
         uselist=False,
         cascade="all, delete-orphan",
     )
+    # One-to-one, like `stats`. Absent for every learner who registered before
+    # Phase 9.5 -- and that absence is meaningful, not a gap: see
+    # `app/models/onboarding.py`.
+    onboarding: Mapped["UserOnboarding | None"] = relationship(
+        back_populates="user",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+
     skill_progress: Mapped[list["UserSkillProgress"]] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",
@@ -177,4 +186,5 @@ class Session(Base):
     user: Mapped[User] = relationship(back_populates="sessions")
 
 
+from app.models.onboarding import UserOnboarding  # noqa: E402
 from app.models.progress import LessonAttempt, UserSkillProgress  # noqa: E402

@@ -33,6 +33,28 @@ from app.schemas.path import (
 )
 
 
+def _is_placed_out(progress: UserSkillProgress | None) -> bool:
+    """Whether a placement test placed the learner beyond this skill."""
+    return progress is not None and progress.placed_out_at is not None
+
+
+def _cleared(progress: UserSkillProgress | None) -> bool:
+    """Whether this skill no longer stands between the learner and the next one.
+
+    Two different facts, both of which unlock what follows:
+
+    * the learner **earned a crown** — they completed every lesson in it;
+    * the learner was **placed out** of it by the placement test (Phase 9.5).
+
+    They are combined here, in one function, precisely so they are not conflated
+    anywhere else: the unlock rule treats them the same, and ``_skill_state``
+    below still reports them as different states, because they are.
+    """
+    if progress is None:
+        return False
+    return progress.crowns >= 1 or progress.placed_out_at is not None
+
+
 def _skill_state(
     progress: UserSkillProgress | None,
     previous_progress: UserSkillProgress | None,
@@ -43,8 +65,13 @@ def _skill_state(
     The rule, in full:
 
     * ``COMPLETED`` — this skill has at least one crown.
+    * ``PLACED_OUT`` — a placement test placed the learner beyond it. Reported
+      separately from ``COMPLETED`` on purpose: the learner has not done these
+      lessons, and a path that said they had would be lying about their own
+      history. It unlocks what follows exactly as a crown does, and the skill
+      stays playable so it can be studied properly.
     * ``AVAILABLE`` — it is the very first skill of the course, **or** the skill
-      immediately before it has at least one crown.
+      immediately before it is cleared (crowned or placed out).
     * ``LOCKED`` — otherwise.
 
     A crown means "every lesson in this skill has been completed", so
@@ -52,6 +79,9 @@ def _skill_state(
     crowns rather than ``lessons_completed >= total_lessons`` keeps the unlock
     condition a single integer comparison and avoids needing the *previous*
     skill's lesson count here.
+
+    A skill that is *both* crowned and placed out reports ``COMPLETED``: actually
+    having done the work is the stronger, and truer, statement.
 
     ``None`` progress is treated as zero rather than as an error: a learner who
     has never touched a skill legitimately has no row, and the seed happening to
@@ -61,11 +91,13 @@ def _skill_state(
     if crowns >= 1:
         return SkillState.COMPLETED
 
+    if _is_placed_out(progress):
+        return SkillState.PLACED_OUT
+
     if is_first:
         return SkillState.AVAILABLE
 
-    previous_crowns = previous_progress.crowns if previous_progress else 0
-    return SkillState.AVAILABLE if previous_crowns >= 1 else SkillState.LOCKED
+    return SkillState.AVAILABLE if _cleared(previous_progress) else SkillState.LOCKED
 
 
 def build_path(db: Session, course_id: int, user: User) -> CoursePathResponse:
@@ -129,6 +161,7 @@ def build_path(db: Session, course_id: int, user: User) -> CoursePathResponse:
                         progress, previous_progress, is_first=index == 0
                     ),
                     crowns=progress.crowns if progress else 0,
+                    placed_out=_is_placed_out(progress),
                     # Counted from the completed-lesson set rather than read from
                     # progress.lessons_completed, so the two representations can
                     # never disagree in the response. The stored counter stays

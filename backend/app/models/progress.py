@@ -88,6 +88,21 @@ class UserSkillProgress(Base):
         DateTime, nullable=True
     )
 
+    # When a placement test concluded that the learner already knows this
+    # material (Phase 9.5). Null for everyone who has not taken one.
+    #
+    # **This is a different fact from "completed", and the schema keeps them
+    # different.** A crown means the learner worked through every lesson in the
+    # skill; this means they were assessed as being past it. Both make the next
+    # skill available, and the path reports them as distinct states, so the
+    # distinction survives all the way to what the learner sees. Collapsing them
+    # -- by writing crowns at placement time -- would have been fewer lines and
+    # would have made the learning path lie about what happened.
+    #
+    # A nullable timestamp rather than a boolean: it records *when*, and null is
+    # a perfectly good "no". Same shape as `last_completed_at` above.
+    placed_out_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
     user: Mapped["User"] = relationship(back_populates="skill_progress")
     skill: Mapped["Skill"] = relationship(back_populates="progress_records")
 

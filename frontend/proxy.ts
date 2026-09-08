@@ -24,13 +24,18 @@ import { NextResponse, type NextRequest } from "next/server";
  * A forged or stale cookie therefore reaches the page, which then gets a 401
  * from the API and redirects properly. That is the correct division: cheap guess
  * here, real answer there.
+ *
+ * **Onboarding routing is not done here either**, for the same reason: deciding
+ * whether a learner has finished onboarding needs their row, and that is an API
+ * call. Each page asks the server directly — see `lib/onboarding/guard.ts`. All
+ * this file knows about `/onboarding` is that it needs a session.
  */
 
 /** Must match `session_cookie_name` in the backend's settings. */
 const SESSION_COOKIE = "duolingo_session";
 
 /** Routes that require a learner. Everything else is public. */
-const PROTECTED = ["/learn", "/leaderboard", "/profile"];
+const PROTECTED = ["/learn", "/leaderboard", "/profile", "/onboarding"];
 
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -52,5 +57,10 @@ export function proxy(request: NextRequest) {
 export const config = {
   // Static assets and the API proxy never need this check, and running
   // middleware on them would cost a function invocation per file.
-  matcher: ["/learn/:path*", "/leaderboard/:path*", "/profile/:path*"],
+  matcher: [
+    "/learn/:path*",
+    "/leaderboard/:path*",
+    "/profile/:path*",
+    "/onboarding/:path*",
+  ],
 };

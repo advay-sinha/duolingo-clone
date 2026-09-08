@@ -19,16 +19,31 @@ import type { LessonNode, SkillNode } from "@/lib/api/types";
 /**
  * The visual variant of a skill node.
  *
- * Four variants over three domain states. `in-progress` is **not** a backend
+ * Five variants over four domain states. `in-progress` is **not** a backend
  * state and must never become one: it is `AVAILABLE` with at least one lesson
  * done, which the response already tells us. The Stitch design draws that node
  * differently (a partial progress ring), so the distinction is real — but it is
  * a rendering concern, derived from data the server already sent.
+ *
+ * `placed-out` is the opposite case: a genuine backend state, because nothing
+ * else in the response could tell the client that a placement test carried the
+ * learner past this skill.
  */
-export type SkillVisual = "locked" | "available" | "in-progress" | "completed";
+export type SkillVisual =
+  | "locked"
+  | "available"
+  | "in-progress"
+  | "completed"
+  | "placed-out";
 
 export function skillVisual(skill: SkillNode): SkillVisual {
   if (skill.state === "COMPLETED") return "completed";
+  // Phase 9.5. Unlike `in-progress`, this *is* a backend state: the server knows
+  // the learner was placed beyond this skill and the client could not derive it
+  // from anything else in the response. It is drawn differently from a crowned
+  // skill on purpose — the learner never did these lessons, and a gold crown
+  // would say they had.
+  if (skill.state === "PLACED_OUT") return "placed-out";
   if (skill.state === "LOCKED") return "locked";
   return skill.lessons_completed > 0 ? "in-progress" : "available";
 }
@@ -96,6 +111,8 @@ export function skillStateLabel(skill: SkillNode): string {
       return "Locked. Complete the previous skill to unlock.";
     case "completed":
       return `Completed. ${skill.crowns} crown${skill.crowns === 1 ? "" : "s"} earned.`;
+    case "placed-out":
+      return `Placed out by your placement test. Not yet studied — ${skill.total_lessons} lesson${skill.total_lessons === 1 ? "" : "s"} available to practise.`;
     case "in-progress":
       return `In progress. ${skill.lessons_completed} of ${skill.total_lessons} lessons complete.`;
     default:

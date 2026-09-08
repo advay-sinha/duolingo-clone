@@ -122,6 +122,20 @@ export const DEFAULT_INSTRUCTIONS: Record<ExercisePublic["type"], string> = {
 };
 
 /**
+ * The part of a verdict an exercise renderer actually uses.
+ *
+ * Narrowed from `SubmitAnswerResponse` in Phase 9.5, when the placement test
+ * became a second consumer of these renderers. A placement verdict carries no XP
+ * and no hearts — it *cannot*, by design — so requiring the full lesson response
+ * would have meant either faking those fields or writing a second set of
+ * renderers. Every renderer only ever read `.correct`, so the prop now asks for
+ * exactly that, and `SubmitAnswerResponse` still satisfies it structurally.
+ */
+export interface ExerciseVerdict {
+  correct: boolean;
+}
+
+/**
  * A draft answer, or `null` when the learner has not supplied enough to submit.
  *
  * Exercise components own their own input state and report upward through this

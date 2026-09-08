@@ -17,12 +17,15 @@
 import Link from "next/link";
 
 import { getCoursePath, getCourses } from "@/lib/api/courses";
+import { loadStatus } from "@/lib/onboarding/guard";
+import { routeForStatus } from "@/lib/onboarding/steps";
 import { forwardedAuth, redirectIfUnauthenticated } from "@/lib/api/server";
 import { getCurrentUserStats } from "@/lib/api/users";
 import type { CoursePathResponse, UserStats } from "@/lib/api/types";
 import { AppShell } from "@/components/shell/AppShell";
 import { DailyGoal } from "@/components/shell/StatsBar";
 import { LearningPath } from "@/components/learning-path/LearningPath";
+import { redirect } from "next/navigation";
 
 export const metadata = {
   title: "Learn · Duolingo Clone",
@@ -117,6 +120,14 @@ async function loadScreen(): Promise<
 }
 
 export default async function LearnPage() {
+  // Phase 9.5: a learner who has not finished onboarding belongs on the step
+  // they stopped at, not here. The check is a server-side read of their row on
+  // every request, so it cannot be skipped by typing this URL — and a learner
+  // who registered before onboarding existed has no row, is reported DONE, and
+  // renders straight through exactly as they always did.
+  const onboarding = await loadStatus();
+  if (!onboarding.completed) redirect(routeForStatus(onboarding));
+
   const screen = await loadScreen();
 
   if (!screen.ok) return <ErrorScreen message={screen.message} />;

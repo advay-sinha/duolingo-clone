@@ -14,6 +14,12 @@ from app.models.content import (
     Skill,
     Unit,
 )
+from app.models.onboarding import (
+    ProficiencyLevel,
+    StartingMode,
+    UserOnboarding,
+)
+from app.models.placement import PlacementAnswer, PlacementTest
 from app.models.progress import (
     LessonAttempt,
     LessonAttemptAnswer,
@@ -31,11 +37,16 @@ __all__ = [
     "LessonAttempt",
     "LessonAttemptAnswer",
     "LessonAttemptPair",
+    "PlacementAnswer",
+    "PlacementTest",
+    "ProficiencyLevel",
     "Session",
     "Skill",
+    "StartingMode",
     "Unit",
     "User",
     "UserAchievement",
+    "UserOnboarding",
     "UserSkillProgress",
     "UserStats",
 ]

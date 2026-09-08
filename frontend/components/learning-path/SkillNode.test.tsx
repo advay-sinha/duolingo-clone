@@ -29,6 +29,7 @@ function skill(over: Partial<SkillNodeData> = {}): SkillNodeData {
     icon: "waving_hand",
     state: "AVAILABLE",
     crowns: 0,
+    placed_out: false,
     lessons_completed: 0,
     total_lessons: 2,
     xp_earned: 0,

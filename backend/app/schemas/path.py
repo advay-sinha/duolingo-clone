@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 
 
 class SkillState(str, enum.Enum):
-    """The three states a skill can be in for a given learner.
+    """The four states a skill can be in for a given learner.
 
     **Not stored anywhere.** Computed by ``PathService`` from skill ordering and
     crowns — see ADR-14. A ``str`` enum so the JSON value is the readable
@@ -36,6 +36,15 @@ class SkillState(str, enum.Enum):
     LOCKED = "LOCKED"
     AVAILABLE = "AVAILABLE"
     COMPLETED = "COMPLETED"
+    #: The learner was assessed as already knowing this material by the Phase 9.5
+    #: placement test. **A genuinely different fact from COMPLETED**, and the
+    #: reason a fourth state was added rather than reusing the third: a crown
+    #: means the learner worked through every lesson here, and this means they
+    #: never did. Collapsing the two would have been one less enum member and
+    #: would have made the path claim something untrue about the learner's
+    #: history. Behaves like COMPLETED for unlocking, and the skill stays
+    #: playable so it can be studied properly whenever they want.
+    PLACED_OUT = "PLACED_OUT"
 
 
 class LessonNode(BaseModel):
@@ -60,6 +69,10 @@ class SkillNode(BaseModel):
 
     state: SkillState = Field(description="Derived; never stored in the database")
     crowns: int
+    #: True when a placement test placed the learner beyond this skill. Sent
+    #: alongside `state` rather than only inside it so the client can render
+    #: "Placed out" copy without re-deriving anything.
+    placed_out: bool = False
     lessons_completed: int
     total_lessons: int
     xp_earned: int

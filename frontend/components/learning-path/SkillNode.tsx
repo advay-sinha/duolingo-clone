@@ -41,6 +41,15 @@ function NodeGlyph({ variant }: { variant: ReturnType<typeof skillVisual> }) {
       </svg>
     );
   }
+  if (variant === "placed-out") {
+    // Fast-forward, not a crown. The glyph has to say "skipped past", because a
+    // crown would claim the learner did the work.
+    return (
+      <svg width="30" height="30" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        <path d="M4 5l8 7-8 7V5zm9 0l8 7-8 7V5z" />
+      </svg>
+    );
+  }
   return (
     <svg width="32" height="32" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
       <path d="M12 2.5 14.9 8l6.1.9-4.4 4.3 1 6.1-5.6-3-5.6 3 1-6.1L3 8.9 9.1 8 12 2.5z" />
@@ -88,6 +97,15 @@ export function SkillNode({ skill, offset, onSelect }: Props) {
       text: "text-white",
       ring: "var(--color-gold)",
     },
+    // Purple, so it reads as "cleared" without being mistaken for a gold crown
+    // at a glance. Both unlock what follows; only one of them was earned.
+    "placed-out": {
+      bg: "bg-purple",
+      border: "border-purple",
+      depth: "var(--color-purple-depth)",
+      text: "text-white",
+      ring: "var(--color-purple)",
+    },
   }[variant];
 
   return (
@@ -133,7 +151,9 @@ export function SkillNode({ skill, offset, onSelect }: Props) {
         <span className="text-caption tabular-nums text-text-secondary" aria-hidden="true">
           {variant === "locked"
             ? "Locked"
-            : `${skill.lessons_completed}/${skill.total_lessons}`}
+            : variant === "placed-out"
+              ? "Placed out"
+              : `${skill.lessons_completed}/${skill.total_lessons}`}
           {skill.crowns > 0 && ` · ${skill.crowns} 👑`}
         </span>
       </div>

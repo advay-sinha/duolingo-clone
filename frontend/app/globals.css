@@ -254,6 +254,42 @@ body {
   }
 }
 
+/* ============================================================================
+   The onboarding progress rail.
+
+   A native `<progress>` element rather than a styled div, so assistive
+   technology reads the percentage with no hand-written ARIA and the bar still
+   means something with CSS disabled. That does cost these three vendor
+   pseudo-elements: `appearance: none` strips the platform widget, then WebKit
+   needs `-webkit-progress-bar` for the track and `-webkit-progress-value` for
+   the fill, while Firefox uses `-moz-progress-bar` for the fill and styles the
+   track on the element itself. They cannot be combined into one selector — a
+   browser drops an entire rule containing a pseudo-element it does not know.
+   ========================================================================== */
+.onboarding-rail {
+  appearance: none;
+  border: none;
+  border-radius: 9999px;
+  background-color: var(--color-border);
+  overflow: hidden;
+}
+
+.onboarding-rail::-webkit-progress-bar {
+  background-color: var(--color-border);
+  border-radius: 9999px;
+}
+
+.onboarding-rail::-webkit-progress-value {
+  background-color: var(--color-green);
+  border-radius: 9999px;
+  transition: width 200ms ease-out;
+}
+
+.onboarding-rail::-moz-progress-bar {
+  background-color: var(--color-green);
+  border-radius: 9999px;
+}
+
 /* Keyboard focus must stay visible on every interactive element. */
 :focus-visible {
   outline: 3px solid var(--color-blue);
