@@ -308,9 +308,7 @@ progress it summarises.
 │   ├── next.config.ts            the /api/v1 rewrite
 │   ├── proxy.ts                  cookie-presence redirect
 │   └── .env.example
-│
-├── docs/
-│   └── CODEBASE_LEARNING.md      architecture & implementation documentation
+|
 └── README.md
 ```
 
