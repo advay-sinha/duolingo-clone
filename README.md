@@ -1289,8 +1289,22 @@ must be created by you. No credentials exist in this repository and none should.
 turso auth signup
 turso db create duolingo-clone
 turso db show duolingo-clone --url        # → libsql://duolingo-clone-<org>.turso.io
-turso db tokens create duolingo-clone     # → the auth token; treat it as a secret
+turso db tokens create duolingo-clone     # → the DATABASE token; treat it as a secret
 ```
+
+**Two tokens exist and they are easy to confuse:**
+
+| Command | What it is | Use it here? |
+|---|---|---|
+| `turso auth token` | Your **account/API** token — authenticates the CLI to Turso | ❌ never |
+| `turso db tokens create <db>` | The **database** token — grants access to one database | ✅ this one |
+
+There is **no separate token environment variable.** The token is a query
+parameter on `DATABASE_URL`, because that is what the `sqlite+libsql` dialect
+consumes — it strips the SQLAlchemy-specific keys and passes the rest to the
+driver, turning `sqlite+libsql://<host>/?authToken=<token>&secure=true` into an
+https connection to `<host>?authToken=<token>`. Do not create `TURSO_AUTH_TOKEN`;
+nothing reads it. **The whole `DATABASE_URL` is therefore a secret.**
 
 ### 2. Load the schema and seed content
 
@@ -1326,6 +1340,33 @@ export DATABASE_URL="sqlite+libsql://<db>-<org>.turso.io/?authToken=<token>&secu
 python -m app.db.migrate
 python -m app.db.seed        # idempotent — safe to re-run
 ```
+
+> ### ⚠️ The one thing everyone gets wrong
+>
+> `turso db show <db> --url` prints the URL in **Turso's** scheme:
+>
+> ```
+> libsql://my-db-org.turso.io          ← what the CLI gives you
+> sqlite+libsql://my-db-org.turso.io   ← what SQLAlchemy needs
+> ```
+>
+> SQLAlchemy has no `libsql` backend — libSQL is a **dialect of sqlite**, so the
+> URL must name both. Pasting the CLI output directly makes the app fail at
+> import with `NoSuchModuleError: Can't load plugin: sqlalchemy.dialects:libsql`,
+> which names a plugin rather than the setting that is wrong. The app now refuses
+> to start with a message containing the corrected URL.
+>
+> The two failures are worth telling apart when debugging:
+>
+> | Error names | Meaning |
+> |---|---|
+> | `sqlalchemy.dialects:libsql` | the `sqlite+` prefix is missing |
+> | `sqlalchemy.dialects:sqlite.libsql` | prefix is right, driver not installed |
+>
+> **And set this on the hosting platform, never in `backend/.env`.** A Turso URL
+> in that file breaks local development outright: the driver has no Windows
+> wheel, so the engine cannot be built at import and even `pytest` fails to
+> start.
 
 ### 3. Configure the backend
 

@@ -187,6 +187,50 @@ class Settings(BaseSettings):
         "http://127.0.0.1:3000",
     ]
 
+    @field_validator("database_url", mode="after")
+    @classmethod
+    def _check_database_url_scheme(cls, value: str) -> str:
+        """Reject a database URL SQLAlchemy cannot load a dialect for.
+
+        **This exists because of a real deployment failure**, and the mistake is
+        one almost everyone makes once. The Turso CLI prints the database URL in
+        its own scheme::
+
+            $ turso db show my-db --url
+            libsql://my-db-org.turso.io
+
+        Pasting that straight into ``DATABASE_URL`` gives SQLAlchemy a URL whose
+        *backend* is ``libsql``, and there is no such SQLAlchemy backend. The
+        driver is a **dialect of sqlite**, so the URL has to name both::
+
+            sqlite+libsql://my-db-org.turso.io/?authToken=...&secure=true
+            ▲      ▲
+            │      └── driver   → sqlalchemy.dialects:sqlite.libsql
+            └───────── backend
+
+        Without this check the failure is
+        ``NoSuchModuleError: Can't load plugin: sqlalchemy.dialects:libsql``,
+        raised from ``create_engine`` at *import* time — so the whole application
+        fails to start, and the message names a plugin rather than the setting
+        that is wrong or what to put in it.
+
+        Note the two failures are distinguishable, and the difference is worth
+        knowing when debugging:
+
+        * ``...dialects:libsql``        → the URL is missing the ``sqlite+`` prefix
+        * ``...dialects:sqlite.libsql`` → the prefix is right, the driver is not
+          installed
+        """
+        if value.startswith("libsql://"):
+            corrected = f"sqlite+{value}"
+            raise ValueError(
+                "DATABASE_URL starts with 'libsql://', which is the scheme the "
+                "Turso CLI prints -- but SQLAlchemy has no 'libsql' backend, so "
+                "the application cannot start. libSQL is a *dialect of sqlite*, "
+                f"so prefix it with 'sqlite+':  {corrected}"
+            )
+        return value
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def _parse_cors_origins(cls, value: object) -> list[str]:

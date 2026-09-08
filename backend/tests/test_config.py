@@ -363,11 +363,20 @@ def test_production_accepts_a_file_on_a_persistent_volume() -> None:
     assert production(database_url="sqlite:////data/duolingo.db")
 
 
-def test_development_is_unaffected_by_the_database_check() -> None:
-    """The default local file must keep working with no configuration at all."""
+def test_development_is_unaffected_by_the_database_check(monkeypatch) -> None:
+    """The default local file must keep working with no configuration at all.
+
+    `_env_file=None` and the `delenv` are both needed for this to mean anything:
+    a developer with a `backend/.env` (or a DATABASE_URL exported for a one-off
+    command) would otherwise be testing *their* configuration rather than the
+    default. A test whose result depends on an untracked file is a test that
+    fails for the wrong reason.
+    """
     from app.core.config import DEFAULT_SQLITE_URL
 
-    assert Settings().database_url == DEFAULT_SQLITE_URL
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    assert Settings(_env_file=None).database_url == DEFAULT_SQLITE_URL
     assert Settings(database_url=DEFAULT_SQLITE_URL).is_production is False
 
 
@@ -382,6 +391,43 @@ def test_the_local_sqlite_default_is_still_a_plain_sqlite_file() -> None:
 
     assert DEFAULT_SQLITE_URL.startswith("sqlite:///")
     assert DEFAULT_SQLITE_URL.endswith("duolingo.db")
+
+
+def test_the_turso_cli_url_scheme_is_refused_with_the_correction() -> None:
+    """**A real deployment failure, and an easy mistake to make.**
+
+    `turso db show --url` prints `libsql://...`, and pasting it straight into
+    DATABASE_URL gives SQLAlchemy a backend it does not have. The application
+    then fails at *import* with
+
+        NoSuchModuleError: Can't load plugin: sqlalchemy.dialects:libsql
+
+    which names a plugin rather than the setting that is wrong. libSQL is a
+    dialect *of sqlite*, so the URL needs both parts.
+    """
+    with pytest.raises(ValidationError) as exc:
+        Settings(database_url="libsql://my-db-org.turso.io/?authToken=t")
+
+    message = problems_from(exc)
+    assert "DATABASE_URL" in message
+    # The message must contain the corrected URL, ready to paste.
+    assert "sqlite+libsql://my-db-org.turso.io/?authToken=t" in message
+
+
+def test_the_correct_libsql_scheme_is_accepted() -> None:
+    url = "sqlite+libsql://my-db-org.turso.io/?authToken=t&secure=true"
+
+    assert Settings(database_url=url).database_url == url
+
+
+def test_the_scheme_check_does_not_touch_ordinary_urls() -> None:
+    """It must not become a general URL validator — SQLAlchemy owns that."""
+    for url in (
+        "sqlite:///./local.db",
+        "sqlite:///:memory:",
+        "postgresql+psycopg://host/db",
+    ):
+        assert Settings(database_url=url).database_url == url
 
 
 def test_an_unparseable_database_url_is_not_this_checks_problem() -> None:
